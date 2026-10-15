@@ -470,3 +470,160 @@ class TestLegacyPermissionKeys:
 
         assert response.status_code == 200
         assert response.json()["permissions"] == {"*": True}
+
+
+# ---------------------------------------------------------------------------
+# Audit log: every role write records an ``admin.role.*`` row
+# ---------------------------------------------------------------------------
+
+
+async def _role_rows(db):
+    """Read back what the route committed (the rollback drops anything merely
+    flushed). Capture ids and headers before calling this: it expires ORM rows."""
+    from sqlalchemy import select
+
+    from app.models.audit_log import AuditLogEntry
+
+    await db.rollback()
+    result = await db.execute(
+        select(AuditLogEntry)
+        .where(AuditLogEntry.action.like("admin.role.%"))
+        .order_by(AuditLogEntry.created_at)
+    )
+    return list(result.scalars().all())
+
+
+class TestRoleAudit:
+    async def _admin(self, db):
+        await create_role(db, key="admin", label="Admin", permissions={"*": True})
+        admin = await create_user(db, email="admin@test.com", role="admin")
+        return admin.id, auth_headers(admin)
+
+    async def test_create_records_granted_permissions(self, client, db):
+        admin_id, headers = await self._admin(db)
+        resp = await client.post(
+            "/api/v1/roles",
+            json={
+                "key": "auditor",
+                "label": "Auditor",
+                "permissions": {"inventory.view": True, "inventory.edit": False},
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 201
+
+        [row] = await _role_rows(db)
+        assert (row.action, row.category, row.outcome) == (
+            "admin.role.created",
+            "admin",
+            "success",
+        )
+        assert row.actor_user_id == admin_id
+        assert (row.target_type, row.target_id, row.target_label) == ("role", "auditor", "Auditor")
+        assert row.details["permissions"] == {"inventory.view": True}
+
+    async def test_update_records_only_the_changed_permission_keys(self, client, db):
+        admin_id, headers = await self._admin(db)
+        await create_role(
+            db,
+            key="auditor",
+            label="Auditor",
+            is_system=False,
+            permissions={
+                "inventory.view": True,
+                "reports.ea_dashboard": True,
+                "inventory.edit": False,
+            },
+        )
+        resp = await client.patch(
+            "/api/v1/roles/auditor",
+            json={
+                "label": "Auditors",
+                "permissions": {
+                    "inventory.view": True,  # unchanged
+                    "reports.ea_dashboard": False,  # revoked
+                    "inventory.edit": True,  # granted
+                    "inventory.create": False,  # newly listed, still not granted
+                },
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 200
+
+        [row] = await _role_rows(db)
+        assert row.action == "admin.role.updated"
+        assert row.actor_user_id == admin_id
+        assert (row.target_id, row.target_label) == ("auditor", "Auditors")
+        assert row.details == {
+            "label": {"old": "Auditor", "new": "Auditors"},
+            "permissions": {
+                "old": {"inventory.edit": False, "reports.ea_dashboard": True},
+                "new": {"inventory.edit": True, "reports.ea_dashboard": False},
+            },
+        }
+
+    async def test_promoting_a_default_records_each_demoted_role(self, client, db):
+        admin_id, headers = await self._admin(db)
+        member = await create_role(
+            db, key="member", label="Member", is_system=False, permissions={}
+        )
+        member.is_default = True
+        await db.flush()
+        await create_role(db, key="auditor", label="Auditor", is_system=False, permissions={})
+        resp = await client.patch(
+            "/api/v1/roles/auditor", json={"is_default": True}, headers=headers
+        )
+        assert resp.status_code == 200
+
+        rows = await _role_rows(db)
+        by_target = {r.target_id: r for r in rows}
+        assert sorted(by_target) == ["auditor", "member"]
+        assert all(r.action == "admin.role.updated" for r in rows)
+        assert all(r.actor_user_id == admin_id for r in rows)
+        assert by_target["member"].target_label == "Member"
+        assert by_target["member"].details == {"is_default": {"old": True, "new": False}}
+        assert by_target["auditor"].details == {"is_default": {"old": False, "new": True}}
+
+    async def test_archive_and_restore_record(self, client, db):
+        _, headers = await self._admin(db)
+        await create_role(db, key="auditor", label="Auditor", is_system=False, permissions={})
+        await create_user(db, email="a1@test.com", role="auditor")
+
+        assert (
+            await client.post("/api/v1/roles/auditor/archive", headers=headers)
+        ).status_code == 200
+        assert (
+            await client.post("/api/v1/roles/auditor/restore", headers=headers)
+        ).status_code == 200
+
+        rows = await _role_rows(db)
+        assert [r.action for r in rows] == ["admin.role.archived", "admin.role.restored"]
+        assert rows[0].details == {"affected_users_count": 1}
+        assert all(r.target_id == "auditor" for r in rows)
+
+    async def test_refused_write_records_nothing(self, client, db):
+        await create_role(db, key="admin", label="Admin", permissions={"*": True})
+        await create_role(db, key="viewer", label="Viewer", permissions=VIEWER_PERMISSIONS)
+        viewer = await create_user(db, email="viewer@test.com", role="viewer")
+        resp = await client.post(
+            "/api/v1/roles",
+            json={"key": "sneaky", "label": "Sneaky", "permissions": {"*": True}},
+            headers=auth_headers(viewer),
+        )
+        assert resp.status_code == 403
+        assert await _role_rows(db) == []
+
+
+class TestRoleChanges:
+    """``role_changes`` — the pure helper behind the role diff (its
+    ``permissions`` narrowing is ``audit_log.permission_changes``, tested in
+    ``tests/services/test_audit_log_service.py``)."""
+
+    def test_role_changes_ignores_unchanged_fields(self):
+        from app.api.v1.roles import role_changes
+
+        before = {"label": "A", "color": "#000000", "permissions": {"x": True}}
+        assert role_changes(before, dict(before)) == {}
+        assert role_changes(before, {**before, "color": "#ffffff"}) == {
+            "color": {"old": "#000000", "new": "#ffffff"}
+        }

@@ -5,7 +5,7 @@ Das **Audit-Log** unter **Admin → Einstellungen → Audit-Log** (`/admin/setti
 | Unterregisterkarte | URL | Was sie aufzeichnet |
 |--------------------|-----|---------------------|
 | **Änderungen** | `/admin/settings?tab=audit-log` | Jeden Schreibvorgang in der Landschaft — Karten, Beziehungen, Risiken, Tags, Stakeholder-Rollen, Entscheidungsentwürfe —, gruppiert in Mutations-Batches, mit einem Diff pro Ereignis und einem **Rollback** |
-| **Sicherheit & Administration** | `/admin/settings?tab=audit-log&view=security` | An- und Abmeldungen, fehlgeschlagene Versuche, Sperrungen, SSO- und Proxy-Sitzungen, Passwortereignisse und Rollenübernahme |
+| **Sicherheit & Administration** | `/admin/settings?tab=audit-log&view=security` | Anmeldungen und Abmeldungen, fehlgeschlagene Versuche, Sperrungen, SSO- und Proxy-Sitzungen, Passwortereignisse, Rollenübernahme und jede administrative Aktion |
 
 Die beiden sind bewusst getrennt. **Änderungen** ist ein Arbeitswerkzeug — es existiert, damit Sie einen fehlerhaften Schreibvorgang sehen und rückgängig machen können — und hält nur eine kurze Historie vor. **Sicherheit & Administration** ist eine Beweisspur: Ihre Einträge lassen sich weder bearbeiten noch löschen, und sie wird standardmäßig ein Jahr lang aufbewahrt.
 
@@ -39,10 +39,11 @@ Die Unterregisterkarte **Sicherheit & Administration** listet einen Eintrag pro 
 - Kontosperrungen nach wiederholten Fehlversuchen;
 - Registrierungen sowie das Festlegen, Zurücksetzen und Ändern von Passwörtern;
 - Rollenübernahme — eine Administratorin, die **Als Rolle anzeigen…** startet und beendet;
+- administrative Aktionen — Änderungen an Benutzern, Rollen, Einstellungen, dem Metamodell, Tags, Berechnungen, Erweiterungen, Importen, Integrationen, öffentlichen Portalen und veröffentlichten Diagrammen, Umfragen und dem Betreiberzugang (siehe [Administrative Aktionen](#administrative-actions));
 - Exporte dieses Protokolls selbst.
 
-!!! note "Kommt mit der nächsten Version"
-    **Administrative Aktionen** — Änderungen an Benutzern, Rollen, Einstellungen, dem Metamodell, Erweiterungen, Importen und Integrationen — und **Datenexporte** (CSV-/JSON-Exporte des Inventars, Workspace- und Migrationsexporte) werden mit der nächsten Version in demselben Protokoll aufgezeichnet.
+!!! note "In der nächsten Version"
+    **Datenexporte** (CSV/JSON-Exporte des Inventars, Workspace- und Migrationsexporte) werden in der nächsten Version in diesem Protokoll erfasst.
 
 ### Spalten
 
@@ -70,6 +71,8 @@ Eine Suche nach einer E-Mail-Adresse trifft Akteur, betroffenes Konto und Ziel, 
 ### Eintragsdetails
 
 Klicken Sie auf eine Zeile, um die Eintragsleiste zu öffnen. Sie zeigt jedes Feld des Eintrags, einschließlich des User-Agents des Browsers und der mit ihm aufgezeichneten **Details** — den Grundcode einer fehlgeschlagenen Anmeldung, den Zeitpunkt, zu dem eine Sperre endet, den Identitätsanbieter einer SSO-Anmeldung. Zeichnet ein Eintrag eine Änderung auf, erscheinen die Details als Tabelle mit alten und neuen Werten. Geheimnisse werden nie gespeichert: Ein Passwort, Token oder Client-Secret wird vor dem Schreiben des Eintrags durch `***` ersetzt.
+
+Angaben, die eine Änderung einordnen, ohne Teil von ihr zu sein — die aktuelle Adresse eines Portals und ob es veröffentlicht ist, ob die Zugangsdaten einer Verbindung ersetzt wurden, die Typen, die eine Migrationszuordnung abdeckt —, stehen unter **Kontext** unterhalb der Tabelle.
 
 Die Leiste bietet keine Aktionen. Einträge können weder bearbeitet noch gelöscht werden.
 
@@ -125,6 +128,28 @@ Die Leiste bietet keine Aktionen. Einträge können weder bearbeitet noch gelös
 | `invalid_token` | Der Einladungs- oder Zurücksetzungslink war ungültig oder ist abgelaufen |
 
 Eine Häufung von `unknown_user`-Fehlschlägen von einer IP-Adresse ist das Muster von Password Spraying; eine Reihe von `bad_password` gegen ein Konto, gefolgt von `auth.login.locked`, ist ein Rateversuch gegen dieses Konto.
+
+### Administrative Aktionen { #administrative-actions }
+
+Jede Änderung, die ein Administrator an der Konfiguration der Instanz vornimmt, wird in der Kategorie `admin` erfasst. **Akteur** ist der Administrator, **Ziel** ist das geänderte Objekt — ein Benutzer, eine Rolle, eine Einstellung, ein Kartentyp — mit seinem Namen zum damaligen Zeitpunkt, und die **Details** führen auf, was sich geändert hat, als alte und neue Werte, beschränkt auf die tatsächlich geänderten Felder. Für jeden Eintrag gelten zwei Regeln:
+
+- **Geheimnisse werden maskiert.** Ein SMTP-Passwort, ein SSO-Client-Secret, ein KI-Anbieterschlüssel, ein ServiceNow-Zugangsdatum oder jeder andere geheime Wert wird als `***` geschrieben: Der Eintrag zeigt, dass er sich geändert hat, aber nie, was er war oder geworden ist.
+- **Weder Lizenztext noch Zugangsdaten werden gespeichert.** Eine Erweiterungslizenz wird identifiziert, nicht kopiert, und ein Passwort, das ein Administrator für einen Benutzer setzt, wird als geändert erfasst, nie mit seinem Wert.
+
+Eine Speicherung, die nichts ändert, wird nicht erfasst, ebenso wenig wie ein Benutzer, der in seinem Profil den eigenen Namen oder die eigene Sprache ändert. Umfangreiche Konfiguration — die Felder, Übersetzungen oder das Layout eines Kartentyps, die Filter eines Portals — wird nach ihrer Größe zusammengefasst statt kopiert; ist die Größe gleich geblieben, kommt ein kurzer Fingerabdruck des Inhalts hinzu, sodass der Eintrag dennoch zeigt, dass sich etwas geändert hat. Die rollenbezogenen Berechtigungsüberschreibungen eines Kartentyps sind die Ausnahme: Jede geänderte Zelle wird mit altem und neuem Wert aufgeführt, wobei ein leerer Wert bedeutet, dass die eigene Berechtigung der Rolle gilt.
+
+| Bereich | Aktionen | Was erfasst wird |
+|------|---------|------------------|
+| **Benutzer & Rollen** | `admin.user.created`, `.updated`, `.deleted`, `.bulk_updated`, `.bulk_deleted`, `.unlocked`; `admin.user.invitation.resent`, `.deleted`; `admin.role.created`, `.updated`, `.archived`, `.restored`; `admin.stakeholder_role.created`, `.updated`, `.deleted`, `.archived`, `.restored` | Konten, die erstellt, bearbeitet, aktiviert oder deaktiviert, gelöscht (einzeln oder in Masse) und entsperrt werden, mit den geänderten Feldern — Rolle, E-Mail, Name, Aktivstatus; erneut gesendete oder widerrufene Einladungen; Anwendungsrollen und Stakeholder-Rollen je Typ, mit den erteilten oder entzogenen Berechtigungen |
+| **Einstellungen** | `admin.settings.updated` | Ein Eintrag pro gespeicherter Einstellung — E-Mail, Authentifizierung und SSO, Registrierung, KI, MCP, Sprachen, Modulschalter, Branding, Logo und Favicon, Aufbewahrungsfristen. Das Ziel ist die Einstellung; die Details sind ihr alter und neuer Wert, mit maskierten Geheimnissen |
+| **Metamodell** | `admin.metamodel.type.*` (including `.references_generated`), `admin.metamodel.relation_type.*`, `admin.metamodel.resource_type.*`, `admin.principle.*` (including `.imported`), `admin.regulation.*` | Kartentypen, Beziehungstypen und Ressourcentypen, die erstellt, geändert, gelöscht oder wiederhergestellt werden, mit den geänderten Eigenschaften; für einen Typ generierte Kartenreferenzen; EA-Prinzipien, einschließlich der aus dem Katalog importierten; Compliance-Regulierungen |
+| **Tags & Berechnungen** | `admin.tag_group.*`, `admin.tag.*`, `admin.calculation.*` | Tag-Gruppen und Tags; berechnete Felder, die erstellt, geändert, gelöscht, aktiviert oder deaktiviert werden, mit alter und neuer Formel, sowie eine Ausführung einer Berechnung über alle Karten (`.recalculated`) |
+| **Erweiterungen** | `admin.extension.install.uploaded`, `.applied`, `.discarded`; `admin.extension.store.claimed`, `.refreshed`, `.installed`; `admin.extension.enabled`, `.disabled`, `.uninstalled`; `admin.extension.license.updated`, `.removed` | Hochgeladene, installierte oder verworfene Pakete; Lizenzen und Downloads aus dem Erweiterungs-Store; aktivierte, deaktivierte und deinstallierte Erweiterungen; ersetzte oder entfernte Lizenz — mit der Erweiterung und ihrer Version, nie mit dem Lizenztext |
+| **Workspace-Transfer & Migration** | `admin.workspace.import.uploaded`, `.applied`, `.completed`, `.discarded`; `admin.migration.uploaded`, `.field_mappings.updated`, `.applied`, `.deleted` | Ein hochgeladenes [Workspace-Paket](workspace-transfer.md), dessen Import gestartet, abgeschlossen oder verworfen wird; eine hochgeladene [Plattformmigration](migration.md), deren Feldzuordnungen bearbeitet werden, die angewendet oder gelöscht wird |
+| **Integrationen** | `admin.servicenow.connection.*`, `admin.servicenow.mapping.*`, `admin.servicenow.sync.pulled`, `.pushed`, `.applied` | ServiceNow-Verbindungen, mit maskierten Zugangsdaten, und Zuordnungen; jeder Abruf, jede Übertragung und jedes Anwenden von Staging-Datensätzen |
+| **Öffentliche Freigabe** | `admin.web_portal.created`, `.updated`, `.deleted`; `admin.diagram.published`, `.unpublished` | [Web-Portale](web-portals.md) und veröffentlichte Diagramme — alles, was Daten ohne Konto erreichbar macht |
+| **Umfragen** | `admin.survey.sent`, `admin.survey.closed` | Eine Umfrage, die an ihre Empfänger gesendet oder geschlossen wird |
+| **Betreiberzugang** | `admin.ops.rescue_access.granted`, `.revoked` | Über die [Betriebs-API](ops-api.md) gewährter oder widerrufener Notfallzugang, erfasst neben den bestehenden `ops.*`-Ereignissen |
 
 ## Was nicht aufgezeichnet wird
 

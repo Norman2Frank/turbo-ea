@@ -5,7 +5,7 @@
 | 子标签页 | URL | 记录内容 |
 |----------|-----|----------|
 | **变更** | `/admin/settings?tab=audit-log` | 对全景的每一次写入——卡片、关系、风险、标签、干系人角色、决策草稿——按变更批次分组，附带逐事件差异和**回滚** |
-| **安全与管理** | `/admin/settings?tab=audit-log&view=security` | 登录与退出、失败的尝试、账户锁定、SSO 与代理会话、密码事件以及角色模拟 |
+| **安全与管理** | `/admin/settings?tab=audit-log&view=security` | 登录和退出、失败的尝试、锁定、SSO 和代理会话、密码事件、角色模拟以及每一项管理操作 |
 
 两者有意分开。**变更**是一个工作工具——用来查看并撤销错误的写入——只保留较短的历史。**安全与管理**是一条证据链：其中的条目既不能编辑也不能删除，默认保留一年。
 
@@ -39,10 +39,11 @@
 - 多次失败后的账户锁定；
 - 注册，以及密码的设置、重置和修改；
 - 角色模拟——管理员开始和结束「以角色查看…」；
+- 管理操作——对用户、角色、设置、元模型、标签、计算、扩展、导入、集成、公开门户和已发布图表、调查以及运维访问的更改（参见[管理操作](#administrative-actions)）；
 - 对本日志本身的导出。
 
-!!! note "将在下一个版本中提供"
-    **管理操作**——对用户、角色、设置、元模型、扩展、导入和集成的更改——以及**数据导出**（清单的 CSV/JSON 导出、工作区导出和迁移导出）将在下一个版本中记录到同一日志中。
+!!! note "将在下一版本中提供"
+    **数据导出**（清单的 CSV/JSON 导出、工作区导出和迁移导出）将在下一版本中记录到同一日志中。
 
 ### 列
 
@@ -70,6 +71,8 @@
 ### 条目详情
 
 点击某一行即可打开条目侧栏。它显示条目的所有字段，包括浏览器的用户代理以及随条目记录的**详情**——登录失败的原因代码、锁定结束的时间、SSO 登录的身份提供方。当条目记录的是一次更改时，详情以旧值与新值的表格显示。机密信息从不存储：密码、令牌或客户端密钥在写入条目之前就被替换为 `***`。
+
+用于说明更改背景但本身不属于更改的信息——门户的当前地址及其是否已发布、连接的凭据是否被替换、迁移映射涵盖的类型——列在表格下方的**上下文**中。
 
 侧栏不提供任何操作。条目既不能编辑也不能删除。
 
@@ -125,6 +128,28 @@
 | `invalid_token` | 邀请或重置链接无效或已过期 |
 
 来自同一 IP 地址的一连串 `unknown_user` 失败就是「密码喷洒」（password spraying）的样子；针对同一账户的一系列 `bad_password`，随后出现 `auth.login.locked`，则是针对该账户的猜测尝试。
+
+### 管理操作 { #administrative-actions }
+
+管理员对实例配置所做的每一项更改都会以 `admin` 类别记录。**操作者**是该管理员，**目标**是被更改的对象——用户、角色、设置、卡片类型——并附带其在当时的名称，**详情**以旧值和新值的形式列出更改内容，仅限实际发生更改的字段。每条记录都遵循两条规则：
+
+- **机密信息会被遮蔽。** SMTP 密码、SSO 客户端密钥、AI 提供商密钥、ServiceNow 凭据或任何其他机密值都写作 `***`：记录只表明它已更改，绝不显示其原值或新值。
+- **绝不存储许可证文本或凭据。** 扩展许可证只做标识而不复制；管理员为用户设置的密码只记录为「已更改」，绝不记录其值。
+
+没有任何更改的保存不会被记录，用户在个人资料中修改自己的姓名或语言也不会被记录。体量较大的配置——卡片类型的字段、翻译或布局，门户的筛选条件——按其大小汇总而不是整段复制；当大小没有变化时，会附加一段简短的内容指纹，使条目仍能显示发生了更改。卡片类型按角色的权限覆盖是例外：每个发生更改的单元格都会连同旧值和新值一起列出，空值表示适用该角色自身的权限。
+
+| 领域 | 操作 | 记录内容 |
+|------|---------|------------------|
+| **用户与角色** | `admin.user.created`, `.updated`, `.deleted`, `.bulk_updated`, `.bulk_deleted`, `.unlocked`; `admin.user.invitation.resent`, `.deleted`; `admin.role.created`, `.updated`, `.archived`, `.restored`; `admin.stakeholder_role.created`, `.updated`, `.deleted`, `.archived`, `.restored` | 账户的创建、编辑、启用或停用、删除（逐个或批量）和解锁，并附带更改的字段——角色、电子邮件、名称、启用状态；重新发送或撤销的邀请；应用角色和按类型定义的利益相关者角色，以及授予或撤销的权限 |
+| **设置** | `admin.settings.updated` | 每保存一项设置记录一条——电子邮件、身份验证与 SSO、注册、AI、MCP、语言、模块开关、品牌、徽标与网站图标、保留期限。目标是该设置；详情是其旧值和新值，机密信息已遮蔽 |
+| **元模型** | `admin.metamodel.type.*` (including `.references_generated`), `admin.metamodel.relation_type.*`, `admin.metamodel.resource_type.*`, `admin.principle.*` (including `.imported`), `admin.regulation.*` | 卡片类型、关系类型和资源类型的创建、更改、删除或恢复，并附带更改的属性；为某一类型生成的卡片编号；EA 原则，包括从目录导入的原则；合规法规 |
+| **标签与计算** | `admin.tag_group.*`, `admin.tag.*`, `admin.calculation.*` | 标签组和标签；计算字段的创建、更改、删除、启用或停用，附带旧公式和新公式，以及对所有卡片运行一次计算（`.recalculated`） |
+| **扩展** | `admin.extension.install.uploaded`, `.applied`, `.discarded`; `admin.extension.store.claimed`, `.refreshed`, `.installed`; `admin.extension.enabled`, `.disabled`, `.uninstalled`; `admin.extension.license.updated`, `.removed` | 上传、安装或丢弃的扩展包；来自扩展商店的许可证和下载；扩展的启用、停用和卸载；许可证的替换或移除——记录扩展及其版本，绝不记录许可证文本 |
+| **工作区迁移与平台迁移** | `admin.workspace.import.uploaded`, `.applied`, `.completed`, `.discarded`; `admin.migration.uploaded`, `.field_mappings.updated`, `.applied`, `.deleted` | 上传的[工作区包](workspace-transfer.md)及其导入的开始、完成或丢弃；上传的[平台迁移](migration.md)及其字段映射的编辑、应用或删除 |
+| **集成** | `admin.servicenow.connection.*`, `admin.servicenow.mapping.*`, `admin.servicenow.sync.pulled`, `.pushed`, `.applied` | ServiceNow 连接（凭据已遮蔽）和映射；每一次拉取、推送以及暂存记录的应用 |
+| **公开暴露** | `admin.web_portal.created`, `.updated`, `.deleted`; `admin.diagram.published`, `.unpublished` | [Web 门户](web-portals.md)和已发布的图表——所有让数据无需账户即可访问的内容 |
+| **调查** | `admin.survey.sent`, `admin.survey.closed` | 发送给收件人或已关闭的调查 |
+| **运维访问** | `admin.ops.rescue_access.granted`, `.revoked` | 通过[运维 API](ops-api.md) 授予或撤销的救援访问，与现有的 `ops.*` 事件一同记录 |
 
 ## 不记录的内容
 

@@ -29,7 +29,7 @@ from app.models.web_portal import WebPortal
 from app.schemas.bpm_public import BpmPublicFlow, BpmPublicProcessMap
 from app.schemas.common import WebPortalCreate, WebPortalUpdate
 from app.schemas.ppm_public import PpmPublicPortfolio
-from app.services import portal_visibility, sso_service
+from app.services import audit_log, portal_visibility, sso_service
 from app.services import ppm_portfolio_service as ppm_portfolio
 from app.services import process_map_service as process_map
 from app.services.card_search import card_search_filter, card_search_rank
@@ -189,6 +189,53 @@ async def list_portals(
     return [_portal_to_dict(p) for p in result.scalars().all()]
 
 
+# A portal is public exposure of inventory data, so every create / edit /
+# delete is an ``admin.web_portal.*`` row in the Security log. Exposure-shaping
+# columns are diffed in full; the free-form configuration blobs are summarised
+# by size so a row stays small.
+_PORTAL_AUDIT_FIELDS = (
+    "name",
+    "slug",
+    "card_type",
+    "is_published",
+    "view",
+    "access_mode",
+    "allowed_email_domains",
+)
+_PORTAL_AUDIT_SUMMARISED = ("filters", "display_fields", "card_config")
+
+
+def _portal_audit_snapshot(portal: WebPortal) -> dict:
+    snap = {f: getattr(portal, f) for f in _PORTAL_AUDIT_FIELDS}
+    snap["description"] = portal.description
+    for f in _PORTAL_AUDIT_SUMMARISED:
+        snap[f] = json.dumps(getattr(portal, f), sort_keys=True, default=str)
+    return snap
+
+
+def _byte_length(value: object) -> int:
+    return len(value.encode()) if isinstance(value, str) else 0
+
+
+def _portal_audit_changes(before: dict, after: dict) -> dict:
+    """Diff two snapshots; a changed config blob or description reads as its
+    size in bytes rather than its content — plus a content fingerprint when the
+    size is unchanged (``audit_log.summarised_change``), and not at all when its
+    content is identical."""
+    changes = audit_log.diff(before, after)
+    for f in (*_PORTAL_AUDIT_SUMMARISED, "description"):
+        if f not in changes:
+            continue
+        summary = audit_log.summarised_change(
+            changes[f]["old"], changes[f]["new"], measure=_byte_length, unit="byte"
+        )
+        if summary is None:
+            del changes[f]
+        else:
+            changes[f] = summary
+    return changes
+
+
 @router.post("", status_code=201)
 async def create_portal(
     body: WebPortalCreate,
@@ -230,6 +277,15 @@ async def create_portal(
         created_by=user.id,
     )
     db.add(portal)
+    await db.flush()
+    await audit_log.record(
+        db,
+        action="admin.web_portal.created",
+        category="admin",
+        actor=user,
+        target=("web_portal", str(portal.id), portal.name),
+        details={f: getattr(portal, f) for f in _PORTAL_AUDIT_FIELDS},
+    )
     await db.commit()
     await db.refresh(portal)
     return _portal_to_dict(portal)
@@ -299,9 +355,25 @@ async def update_portal(
         updates["access_mode"] = mode
         updates["allowed_email_domains"] = domains
 
+    audit_before = _portal_audit_snapshot(portal)
     for field, value in updates.items():
         setattr(portal, field, value)
 
+    await audit_log.record(
+        db,
+        action="admin.web_portal.updated",
+        category="admin",
+        actor=user,
+        target=("web_portal", str(portal.id), portal.name),
+        # The diff, plus — under ``context``, so the top level stays a list of
+        # old/new pairs the Security log renders as a table — the portal's
+        # current slug and publication state: the two facts a reviewer needs to
+        # judge what the change exposed, even when the edit left them alone.
+        details={
+            **_portal_audit_changes(audit_before, _portal_audit_snapshot(portal)),
+            "context": {"slug": portal.slug, "is_published": portal.is_published},
+        },
+    )
     await db.commit()
     await db.refresh(portal)
     return _portal_to_dict(portal)
@@ -318,6 +390,18 @@ async def delete_portal(
     portal = result.scalar_one_or_none()
     if not portal:
         raise HTTPException(404, "Portal not found")
+    await audit_log.record(
+        db,
+        action="admin.web_portal.deleted",
+        category="admin",
+        actor=user,
+        target=("web_portal", str(portal.id), portal.name),
+        details={
+            "slug": portal.slug,
+            "is_published": portal.is_published,
+            "access_mode": portal.access_mode,
+        },
+    )
     await db.delete(portal)
     await db.commit()
 
