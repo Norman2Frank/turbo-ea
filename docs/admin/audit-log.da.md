@@ -40,10 +40,7 @@ Underfanen **Sikkerhed og administration** viser én post pr. sikkerhedsrelevant
 - registreringer samt adgangskoder, der angives, nulstilles eller ændres;
 - rolleovertagelse — en administrator, der starter og stopper **Vis som rolle…**;
 - administrative handlinger — ændringer af brugere, roller, indstillinger, metamodellen, tags, beregninger, udvidelser, importer, integrationer, offentlige portaler og publicerede diagrammer, undersøgelser og operatøradgang (se [Administrative handlinger](#administrative-actions));
-- eksport af selve denne log.
-
-!!! note "I næste version"
-    **Dataeksport** (CSV/JSON-eksport af inventaret, workspace- og migreringseksport) vil blive registreret i denne samme log i næste version.
+- dataeksporter — CSV- og JSON-eksporterne af kort, workspace-eksporter og eksporter til en anden EA-platform (se [Dataeksporter](#data-exports)) — og eksporter af selve denne log.
 
 ### Kolonner
 
@@ -68,11 +65,17 @@ Filterpanelet til venstre indsnævrer listen efter **kategori**, **resultat**, *
 
 En søgning på en e-mailadresse rammer aktør, subjekt og mål, så én adresse finder både, hvad den person har gjort, og hvad der er forsøgt mod vedkommendes konto.
 
-### Postdetaljer
+### Sådan læses en post
 
-Klik på en række for at åbne postens panel. Det viser alle postens felter, herunder browserens user agent og de **detaljer**, der blev registreret med den — årsagskoden for et mislykket login, tidspunktet hvor en spærring ophører, identitetsudbyderen ved et SSO-login. Når en post registrerer en ændring, vises detaljerne som en tabel med gamle og nye værdier. Hemmeligheder gemmes aldrig: en adgangskode, et token eller en klienthemmelighed erstattes af `***`, før posten skrives.
+Klik på en række for at åbne postens panel. Det viser hvert felt i posten — hvornår, hvem, fra hvilken IP-adresse og hvilken browser — og under **Detaljer** det, som posten registrerede, skrevet i almindeligt sprog i stedet for som gemte nøgler:
 
-Oplysninger, der sætter en ændring i perspektiv uden at være en del af den — en portals aktuelle adresse og om den er udgivet, om en forbindelses loginoplysninger blev udskiftet, de typer en migreringstilknytning dækker — vises under **Kontekst** under tabellen.
+- **Ændringer** — én sætning pr. ændring. En redigering af en korttype lyder for eksempel *Feltet «Forretningskritikalitet» (Enkeltvalg) tilføjet til afsnittet «Governance»* eller *Muligheden «Høj» i feltet «Forretningskritikalitet» omdøbt til «Kritisk»*. Felter, afsnit, muligheder, roller og portaler nævnes ved deres etiket, tilladelser ved deres beskrivelse og sprog ved deres navn.
+- **Før / Efter** — en tabel over de ændrede værdier, én række pr. felt, hvert felt nævnt ved sin etiket. Værdierne er formateret: Ja eller Nej, datoer i arbejdsområdets datoformat, farver som farveprøve, filstørrelser i KB eller MB. Hemmeligheder gemmes aldrig: en adgangskode, et token eller en klienthemmelighed erstattes, før posten skrives, og vises som **Hemmelig værdi**.
+- **Kontekst** — oplysninger, der sætter en ændring i sammenhæng uden at være en del af den: en portals nuværende adresse og om den er publiceret, om en forbindelses legitimationsoplysninger blev erstattet, hvor mange rækker en import berørte.
+
+Et mislykket logon viser sin **Årsag** over detaljerne — en forkert adgangskode, en ukendt konto, en midlertidigt låst konto.
+
+Poster skrevet før version 2.161.0 viser deres detaljer, som de blev registreret: gamle og nye værdier vises stadig i tabellen, og det, panelet ikke kan læse, vises som rå JSON.
 
 Panelet har ingen handlinger. Poster kan hverken redigeres eller slettes.
 
@@ -99,7 +102,6 @@ Panelet har ingen handlinger. Poster kan hverken redigeres eller slettes.
 | `auth.password.changed` | en indlogget bruger ændrer sin egen adgangskode |
 | `auth.impersonation.started` | en administrator starter **Vis som rolle…**. Målet er den valgte rolle |
 | `auth.impersonation.stopped` | administratoren vender tilbage til sin egen rolle |
-| `access.audit_log.exported` | nogen eksporterer sikkerhedsloggen til CSV |
 
 **Årsagskoder** for `auth.login.failed`:
 
@@ -151,11 +153,23 @@ En gemning, der ikke ændrer noget, registreres ikke, og det gør en bruger, der
 | **Undersøgelser** | `admin.survey.sent`, `admin.survey.closed` | En undersøgelse sendt til modtagerne, eller lukket |
 | **Operatøradgang** | `admin.ops.rescue_access.granted`, `.revoked` | Nødadgang tildelt eller tilbagekaldt via [drifts-API'et](ops-api.md), registreret ved siden af de eksisterende `ops.*`-hændelser |
 
+### Dataeksporter { #data-exports }
+
+Hver gang data forlader instansen i bulk, registrerer en `access`-post, hvem der tog dem, hvor meget og i hvilken form. Posten skrives, før filen sendes, så en eksport, hvis download aldrig blev gennemført, står stadig i loggen.
+
+| Handling | Registreres, når | Detaljer |
+|----------|------------------|----------|
+| `access.export.cards` | Kort eksporteres gennem API'ets CSV- eller JSON-eksport (`/cards/export/csv`, `/cards/export/json`), som scripts, integrationer og AI-assistenter gør | `format` (`csv` eller `json`), `type` (korttypen eller -typerne) og `rows` (antallet af kort). Målet er korttypen, når eksporten dækkede præcis én |
+| `access.export.workspace` | En fuld [workspace-pakke](workspace-transfer.md) downloades — fra **Workspace-overførsel**, eller af et kontrolplan gennem [drifts-API'et](ops-api.md), som ikke registrerer nogen aktør og registrerer `requested_by: ops` | `include_archived` og `size_bytes` |
+| `access.export.migration` | Workspacet eksporteres til en anden EA-platform under **Admin → Indstillinger → Migrering** (se [Platformsmigrering](migration.md)) | Målplatformen, `include_archived` og `size_bytes` |
+| `access.audit_log.exported` | Nogen eksporterer sikkerhedsloggen til CSV | `rows` |
+
 ## Hvad der ikke registreres
 
 - **Fornyelse af token.** Webappen fornyer sin session med faste mellemrum, så hver åben fane ville tilføje poster, og ingen af dem ville betyde noget.
 - **Anmodninger, der afvises på grund af et udløbet eller ugyldigt sessionstoken.** De opstår, hver gang en session slutter naturligt.
 - **Læsninger af OData-feeds.** Excel og Power BI henter en gemt visnings OData-feed efter en tidsplan, så hver opdatering ville tilføje en post.
+- **Regneark og præsentationer bygget i browseren.** Inventarets og rapporternes Excel- og PowerPoint-downloads laves ud fra data, siden allerede har indlæst, så de er læsninger, ikke eksporter fra serveren.
 - **Almindelig læseadgang** — at åbne et kort, køre en rapport, søge i inventaret.
 
 ## Opbevaring { #retention }
@@ -188,7 +202,7 @@ Hver linje har de samme felter som posten:
 | `ip`, `user_agent` | Klienten |
 | `origin` | web, api, mcp, ext, ops eller system |
 | `impersonator_user_id`, `impersonated_role` | Udfyldt, mens en administrator ser appen som en anden rolle |
-| `details` | Årsagskoder og gamle/nye værdier, med hemmeligheder allerede maskeret |
+| `details` | Op til fire nøgler, med hemmeligheder allerede maskeret: `reason` (en fejlkode), `changes` (`{field: {old, new}}`), `items` (semantiske ændringer, `{kind, …}` — f.eks. `field.added`) og `context` (enkle oplysninger) |
 
 Sender du strømmen til et centralt loglager, ligger der en kopi uden for instansen, uden for rækkevidde af alle, der kan administrere den — og det er netop, hvad en gennemgang af insidertrusler har brug for. Se [Logning og revisionsstrømmen](operations.md#logging-and-the-audit-stream) for, hvordan du indsamler den.
 
@@ -198,4 +212,23 @@ Kolonnen **IP** registrerer klientens adresse, ikke adressen på proxyen foran b
 
 - **Lad `TRUST_PROXY_HEADERS` være slået til**, så længe hver anmodning når backend gennem den medfølgende nginx — standardstakken, [Helm-chartet](kubernetes.md) og [skabelonerne til administrerede containere](managed-containers.md) fungerer alle sådan.
 - **Slå den fra** (`TRUST_PROXY_HEADERS=false`), hvis du eksponerer backend-containeren direkte uden den medfølgende nginx foran: en klient kunne så sende sin egen `X-Real-IP` og selv vælge den adresse, der registreres.
-- **Bag en anden load balancer** ser den medfølgende nginx den load balancers adresse, så hver post registrerer den. En indstilling, der lader nginx stole på den klientadresse, din load balancer videresender (`NGINX_TRUSTED_PROXIES`), er planlagt til en senere version.
+- **Bag en load balancer, en ingress-controller eller et CDN** modtager den medfølgende nginx hver forbindelse fra dette mellemled og registrerer derfor af sig selv load balancerens adresse for hver bruger. Sæt **`NGINX_TRUSTED_PROXIES`** på nginx-containeren som beskrevet nedenfor.
+
+### Bag en load balancer { #behind-a-load-balancer }
+
+`NGINX_TRUSTED_PROXIES` angiver adresserne på mellemleddene foran den medfølgende nginx som IP-adresser eller CIDR-intervaller adskilt af kommaer eller mellemrum. nginx læser så klientadressen fra den `X-Forwarded-For`-header, mellemleddene tilføjer — men kun på en forbindelse, der kommer fra en af de angivne adresser — og springer hver angivet adresse i headeren over, så en kæde af proxyer ender på den første adresse, der ikke er en af dine. Den adresse erstatter forbindelsens, og den `X-Real-IP`-header, backend læser, bærer den uændret videre. Tom, standardværdien, stoler ikke på nogen.
+
+Find værdien i edge-nginx'ens adgangslog (`docker compose logs nginx`, `kubectl logs deployment/turbo-ea-nginx` eller platformens logvisning): adressen i starten af hver linje er det mellemled, der skal stoles på, og det sidste felt i anførselstegn er den `X-Forwarded-For`-header, det sendte.
+
+| Udrulning | Hvor den sættes | Typisk værdi |
+|-----------|-----------------|--------------|
+| Docker Compose, browsere når nginx direkte | — | Lad den være tom |
+| Docker Compose bag din egen reverse proxy | `NGINX_TRUSTED_PROXIES` i `.env` | Reverse proxyens adresse, som nginx ser den |
+| [Kubernetes](kubernetes.md) bag en ingress-controller | Chart-værdien `nginx.trustedProxies` | Clusterets pod-CIDR, for eksempel `10.244.0.0/16` |
+| [AWS ECS Fargate](managed-containers.md#aws-ecs-fargate) | `NginxTrustedProxies` / Terraform `nginx_trusted_proxies` | CIDR-intervallerne for load balancerens subnet |
+| [Azure Container Apps](managed-containers.md#azure-container-apps) | `nginxTrustedProxies` / Terraform `nginx_trusted_proxies` | Miljøets infrastruktursubnet |
+| [Google Cloud Run](managed-containers.md#google-cloud-run) | `NGINX_TRUSTED_PROXIES` i manifestet / Terraform `nginx_trusted_proxies` | De adresser, adgangsloggen viser |
+
+Hold listen lige så snæver som mellemleddene selv. Hver angivet adresse bliver troet, når den navngiver klienten, så et interval, dine brugere forbinder fra — for eksempel hele `10.0.0.0/8` i en intern udrulning — ville lade enhver af dem skrive en anden adresse i loggen. Uden indstilling viser kolonnen load balanceren: ikke nyttigt, men aldrig forfalsket.
+
+Hastighedsbegrænsningen for login tæller forsøg pr. klientadresse fra den samme header, så bag en load balancer er denne indstilling også det, der forhindrer én persons mislykkede forsøg i at bremse alle andre. Det gælder logins, der når backend gennem edge-nginx; MCP-serveren logger direkte ind på backend, så dens egne login-kald deler stadig MCP-containerens adresse.

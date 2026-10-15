@@ -40,10 +40,7 @@ A subaba **Segurança e administração** lista uma entrada para cada ação rel
 - cadastros, e senhas definidas, redefinidas ou alteradas;
 - personificação de papel — um administrador que inicia e encerra **Ver como papel…**;
 - ações administrativas — alterações em usuários, papéis, configurações, metamodelo, tags, cálculos, extensões, importações, integrações, portais públicos e diagramas publicados, pesquisas e acesso do operador (veja [Ações administrativas](#administrative-actions));
-- exportações deste próprio registro.
-
-!!! note "Na próxima versão"
-    As **exportações de dados** (exportações CSV/JSON do inventário, exportações de workspace e de migração) serão registradas neste mesmo registro na próxima versão.
+- exportações de dados — as exportações CSV e JSON de cards, as exportações do workspace e as exportações para outra plataforma de EA (veja [Exportações de dados](#data-exports)) — e as exportações deste próprio registro.
 
 ### Colunas
 
@@ -68,13 +65,19 @@ A barra lateral de filtros à esquerda restringe a lista por **categoria**, **re
 
 Uma busca por endereço de e-mail encontra o ator, o sujeito e o alvo, de modo que digitar um único endereço mostra tanto o que essa pessoa fez quanto o que foi tentado contra a conta dela.
 
-### Detalhes de uma entrada
+### Ler uma entrada
 
-Clique em uma linha para abrir o painel da entrada. Ele mostra todos os campos, incluindo o agente de usuário do navegador e os **detalhes** registrados com ela — o código de motivo de uma entrada com falha, a hora em que um bloqueio termina, o provedor de identidade de uma entrada por SSO. Quando uma entrada registra uma alteração, os detalhes aparecem como uma tabela de valores antigos e novos. Segredos nunca são armazenados: uma senha, um token ou um segredo de cliente é substituído por `***` antes de a entrada ser gravada.
+Clique em uma linha para abrir o painel da entrada. Ele mostra cada campo da entrada — quando, quem, de qual endereço IP e com qual navegador — e, em **Detalhes**, o que a entrada registrou, escrito em linguagem simples em vez de chaves internas:
 
-As informações que enquadram uma alteração sem fazer parte dela — o endereço atual de um portal e se está publicado, se as credenciais de uma conexão foram substituídas, os tipos que um mapeamento de migração cobre — são listadas em **Contexto**, abaixo da tabela.
+- **Alterações** — uma frase por alteração. A edição de um tipo de ficha aparece, por exemplo, como *Campo “Criticidade de negócio” (Seleção única) adicionado à seção “Governança”* ou *Opção “Alta” do campo “Criticidade de negócio” renomeada para “Crítica”*. Campos, seções, opções, papéis e portais são indicados pelo rótulo, as permissões pela descrição e os idiomas pelo nome.
+- **Antes / Depois** — uma tabela dos valores alterados, uma linha por campo, cada campo indicado pelo rótulo. Os valores são formatados: Sim ou Não, datas no formato de data do espaço de trabalho, cores como amostra, tamanhos de arquivo em KB ou MB. Segredos nunca são armazenados: uma senha, um token ou um segredo de cliente é substituído antes de a entrada ser gravada e aparece como **Valor secreto**.
+- **Contexto** — fatos que enquadram uma alteração sem fazer parte dela: o endereço atual de um portal e se ele está publicado, se as credenciais de uma conexão foram substituídas, quantas linhas uma importação afetou.
 
-O painel não tem ações. As entradas não podem ser editadas nem excluídas.
+Um login com falha mostra o seu **Motivo** acima dos detalhes — uma senha incorreta, uma conta desconhecida, uma conta temporariamente bloqueada.
+
+As entradas gravadas antes da versão 2.161.0 mostram os detalhes como foram registrados: os valores antigos e novos continuam aparecendo na tabela, e o que o painel não consegue ler é mostrado como JSON bruto.
+
+O painel não oferece ações. As entradas não podem ser editadas nem excluídas.
 
 ### Exportar CSV
 
@@ -99,7 +102,6 @@ O painel não tem ações. As entradas não podem ser editadas nem excluídas.
 | `auth.password.changed` | um usuário conectado altera a própria senha |
 | `auth.impersonation.started` | um administrador inicia **Ver como papel…**. O alvo é o papel escolhido |
 | `auth.impersonation.stopped` | o administrador volta ao próprio papel |
-| `access.audit_log.exported` | alguém exporta o registro de segurança para CSV |
 
 **Códigos de motivo** de `auth.login.failed`:
 
@@ -151,11 +153,23 @@ Uma gravação que não altera nada não é registrada, nem um usuário que edit
 | **Pesquisas** | `admin.survey.sent`, `admin.survey.closed` | Uma pesquisa enviada aos destinatários, ou encerrada |
 | **Acesso do operador** | `admin.ops.rescue_access.granted`, `.revoked` | Acesso de resgate concedido ou revogado pela [API de operações](ops-api.md), registrado junto aos eventos `ops.*` existentes |
 
+### Exportações de dados { #data-exports }
+
+Toda vez que dados saem da instância em massa, uma entrada `access` registra quem os levou, quanto e em que formato. A entrada é gravada antes de o arquivo ser enviado, então uma exportação cujo download nunca terminou também fica registrada.
+
+| Ação | Registrada quando | Detalhes |
+|------|-------------------|----------|
+| `access.export.cards` | Cards são exportados pela exportação CSV ou JSON da API (`/cards/export/csv`, `/cards/export/json`), como fazem scripts, integrações e assistentes de IA | `format` (`csv` ou `json`), `type` (o tipo ou tipos de card) e `rows` (o número de cards). O alvo é o tipo de card quando a exportação abrangeu exatamente um |
+| `access.export.workspace` | Um [pacote de workspace](workspace-transfer.md) completo é baixado — em **Transferência de workspace**, ou por um plano de controle pela [API de operações](ops-api.md), que não registra ator e registra `requested_by: ops` | `include_archived` e `size_bytes` |
+| `access.export.migration` | O workspace é exportado para outra plataforma de EA em **Admin → Configurações → Migração** (veja [Migração de plataforma](migration.md)) | A plataforma de destino, `include_archived` e `size_bytes` |
+| `access.audit_log.exported` | Alguém exporta o registro de segurança para CSV | `rows` |
+
 ## O que não é registrado
 
 - **A renovação do token.** O aplicativo web renova a sessão periodicamente, então cada aba aberta acrescentaria entradas e nenhuma significaria nada.
 - **Requisições recusadas por um token de sessão expirado ou inválido.** Elas acontecem toda vez que uma sessão termina normalmente.
 - **Leituras de feeds OData.** O Excel e o Power BI consultam o feed OData de uma visualização salva de forma agendada, então cada atualização acrescentaria uma entrada.
+- **Planilhas e apresentações geradas no navegador.** Os downloads em Excel e PowerPoint do inventário e dos relatórios são montados com dados que a página já carregou, então são leituras, não exportações do servidor.
 - **O simples acesso de leitura** — abrir um card, executar um relatório, pesquisar no inventário.
 
 ## Retenção { #retention }
@@ -188,7 +202,7 @@ Cada linha traz os mesmos campos da entrada:
 | `ip`, `user_agent` | O cliente |
 | `origin` | web, api, mcp, ext, ops ou system |
 | `impersonator_user_id`, `impersonated_role` | Preenchidos enquanto um administrador vê o aplicativo como outro papel |
-| `details` | Códigos de motivo e valores antigos/novos, com os segredos já mascarados |
+| `details` | Até quatro chaves, com os segredos já mascarados: `reason` (um código de falha), `changes` (`{field: {old, new}}`), `items` (alterações semânticas, `{kind, …}` — por ex. `field.added`) e `context` (fatos simples) |
 
 Enviar o fluxo para um repositório central de logs guarda uma cópia fora da instância, longe do alcance de quem pode administrá-la — é disso que uma revisão de ameaças internas precisa. Veja [Logs e fluxo de auditoria](operations.md#logging-and-the-audit-stream) para coletá-lo.
 
@@ -198,4 +212,23 @@ A coluna **IP** registra o endereço do cliente, não o do proxy à frente do ba
 
 - **Mantenha `TRUST_PROXY_HEADERS` ativado** enquanto toda requisição chegar ao backend pelo nginx incluído — a pilha padrão, o [chart Helm](kubernetes.md) e os [modelos de contêineres gerenciados](managed-containers.md) funcionam todos assim.
 - **Desative-o** (`TRUST_PROXY_HEADERS=false`) se você expuser o contêiner do backend diretamente, sem o nginx incluído à frente: um cliente poderia então enviar o próprio `X-Real-IP` e escolher o endereço registrado.
-- **Atrás de outro balanceador de carga**, o nginx incluído vê o endereço desse balanceador, e todas as entradas o registram. Uma configuração que permita ao nginx confiar no endereço do cliente repassado pelo seu balanceador de carga (`NGINX_TRUSTED_PROXIES`) está prevista para uma versão futura.
+- **Atrás de um balanceador de carga, um controlador de ingress ou uma CDN**, o nginx incluído recebe todas as conexões desse intermediário e, sozinho, registra o endereço do balanceador para todos os usuários. Defina **`NGINX_TRUSTED_PROXIES`** no contêiner do nginx, como descrito abaixo.
+
+### Atrás de um balanceador de carga { #behind-a-load-balancer }
+
+`NGINX_TRUSTED_PROXIES` lista os endereços dos intermediários à frente do nginx incluído, como endereços IP ou faixas CIDR separados por vírgulas ou espaços. O nginx passa então a ler o endereço do cliente do cabeçalho `X-Forwarded-For` que esses intermediários acrescentam — mas somente em uma conexão vinda de um dos endereços listados — e ignora cada endereço listado nesse cabeçalho, de modo que uma cadeia de proxies se resolve no primeiro endereço que não é um dos seus. Esse endereço substitui o da conexão, e o cabeçalho `X-Real-IP` que o backend lê o transporta sem alteração. Vazio, o padrão, não confia em ninguém.
+
+Para descobrir o valor, leia o log de acesso do nginx de borda (`docker compose logs nginx`, `kubectl logs deployment/turbo-ea-nginx` ou o visualizador de logs da plataforma): o endereço no início de cada linha é o intermediário em quem confiar, e o último campo entre aspas é o cabeçalho `X-Forwarded-For` que ele enviou.
+
+| Implantação | Onde definir | Valor típico |
+|-------------|--------------|--------------|
+| Docker Compose, os navegadores chegam diretamente ao nginx | — | Deixar vazio |
+| Docker Compose atrás do seu próprio proxy reverso | `NGINX_TRUSTED_PROXIES` no `.env` | O endereço do proxy reverso, como o nginx o vê |
+| [Kubernetes](kubernetes.md) atrás de um controlador de ingress | Valor do chart `nginx.trustedProxies` | O CIDR de pods do cluster, por exemplo `10.244.0.0/16` |
+| [AWS ECS Fargate](managed-containers.md#aws-ecs-fargate) | `NginxTrustedProxies` / Terraform `nginx_trusted_proxies` | As faixas CIDR das sub-redes do balanceador de carga |
+| [Azure Container Apps](managed-containers.md#azure-container-apps) | `nginxTrustedProxies` / Terraform `nginx_trusted_proxies` | A sub-rede de infraestrutura do ambiente |
+| [Google Cloud Run](managed-containers.md#google-cloud-run) | `NGINX_TRUSTED_PROXIES` no manifesto / Terraform `nginx_trusted_proxies` | Os endereços que o log de acesso mostra |
+
+Mantenha a lista tão estreita quanto os próprios intermediários. Cada endereço listado é acreditado quando aponta o cliente, então uma faixa de onde seus usuários se conectam — todo o `10.0.0.0/8` em uma implantação interna, por exemplo — permitiria a qualquer um deles gravar outro endereço no registro. Sem configuração, a coluna mostra o balanceador de carga: pouco útil, mas nunca falsificado.
+
+O limite de taxa de entrada conta as tentativas por endereço de cliente a partir do mesmo cabeçalho, então atrás de um balanceador de carga esta configuração também impede que as tentativas com falha de uma pessoa atrasem todas as outras. Isso vale para as entradas que chegam ao backend pelo nginx de borda; o servidor MCP entra diretamente no backend, então as suas próprias chamadas de entrada continuam compartilhando o endereço do contêiner MCP.

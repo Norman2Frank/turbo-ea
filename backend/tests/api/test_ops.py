@@ -201,18 +201,22 @@ async def test_rescue_access_is_dual_written_to_the_audit_log(client, db, monkey
     assert granted.category == "admin" and granted.actor_user_id is None
     assert granted.subject_email == data["admin_email"]
     assert (granted.target_type, granted.target_id) == ("user", data["user_id"])
+    # The free text is the operator's justification — never ``reason``, which
+    # the Security log reserves for failure codes — and the request id is the
+    # reference (the row's target is the rescue user).
     assert granted.details == {
-        "request_id": request_id,
-        "operator_email": "op@turboea.cloud",
-        "operator_name": "Vincent",
-        "reason": "Debug broken SSO configuration",
-        "break_glass": True,
-        "expires_at": datetime.fromisoformat(expires_at).isoformat(),
+        "context": {
+            "operator": "Vincent <op@turboea.cloud>",
+            "justification": "Debug broken SSO configuration",
+            "break_glass": True,
+            "expires_at": datetime.fromisoformat(expires_at).isoformat(),
+            "reference": request_id,
+        }
     }
     assert token not in json.dumps(granted.details)
     assert revoked.action == "admin.ops.rescue_access.revoked"
     assert revoked.subject_email == data["admin_email"]
-    assert revoked.details == {"request_id": request_id}
+    assert revoked.details == {"context": {"reference": request_id}}
 
     # The event stream the ops docs promise is still written alongside.
     events = (
@@ -221,3 +225,58 @@ async def test_rescue_access_is_dual_written_to_the_audit_log(client, db, monkey
         .all()
     )
     assert set(events) >= {"ops.rescue_access_granted", "ops.rescue_access_revoked"}
+
+
+async def test_ops_export_is_dual_written_to_the_audit_log(client, db, monkeypatch):
+    """``GET /ops/export`` keeps its ``ops.workspace_exported`` event and also
+    records ``access.export.workspace`` in the Security log, with no actor (the
+    caller is the control plane) and ``requested_by: ops``. The response is the
+    bundle itself, unchanged."""
+    from app.models.audit_log import AuditLogEntry
+    from app.models.event import Event
+
+    private, public_b64 = make_keypair()
+    monkeypatch.setattr(settings, "OPS_PUBLIC_KEY", public_b64)
+    await create_role(db, key="admin")
+    await create_user(db, role="admin", email="owner@customer.example")
+
+    # Unsigned → refused, nothing recorded.
+    refused = await client.get("/api/v1/ops/export")
+    assert refused.status_code == 401
+
+    headers = ops_headers(private, "GET", "/api/v1/ops/export", b"")
+    response = await client.get("/api/v1/ops/export", headers=headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert response.content[:2] == b"PK"
+
+    await db.rollback()
+    [row] = (
+        (
+            await db.execute(
+                select(AuditLogEntry).where(AuditLogEntry.action == "access.export.workspace")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert (row.category, row.outcome) == ("access", "success")
+    assert row.actor_user_id is None and row.actor_email is None
+    assert row.details == {"context": {"size_bytes": len(response.content), "requested_by": "ops"}}
+
+    [event] = (
+        (await db.execute(select(Event).where(Event.event_type == "ops.workspace_exported")))
+        .scalars()
+        .all()
+    )
+    assert event.data["size_bytes"] == len(response.content)
+
+
+def test_operator_label_folds_the_name_and_the_email():
+    from app.api.v1.ops import _operator_label
+
+    assert _operator_label("Vincent", "op@turboea.cloud") == "Vincent <op@turboea.cloud>"
+    assert _operator_label("  Ana  ", "a@x.io") == "Ana <a@x.io>"
+    assert _operator_label("", "op@turboea.cloud") == "op@turboea.cloud"
+    assert _operator_label("   ", "op@turboea.cloud") == "op@turboea.cloud"
+    assert _operator_label(None, "op@turboea.cloud") == "op@turboea.cloud"

@@ -5,6 +5,16 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.161.0] - 2026-10-15
+
+### Added
+- **Data exports in the Security & admin log** ([#1185](https://github.com/vincentmakes/turbo-ea/discussions/1185)): card CSV and JSON exports, workspace exports (from the admin page or the operations API) and exports for another EA platform are now recorded, with who exported, the format and how much left the instance.
+- **`NGINX_TRUSTED_PROXIES`** for the bundled nginx: list the load balancer, ingress or CDN in front of it and the Security & admin log records each user's real address instead of the load balancer's. Available in Docker Compose, the Helm chart (`nginx.trustedProxies`), the Azure Container Apps, Cloud Run and ECS templates, and the Terraform modules.
+
+### Changed
+- The sign-in rate limit is counted per client address, instead of in one bucket shared by everyone behind the proxy, for sign-ins that reach the backend through the edge nginx, so one person's failed attempts no longer slow down other users; the MCP server's own sign-in calls still share the MCP container's address.
+- The Security & admin log describes every change in plain language — fields, sections, options, permissions, settings and portals named by their labels, with values shown as Yes / No, dates, colours and sizes — instead of counts, fingerprints and raw keys; entries written before this version keep showing their recorded details.
+
 ## [2.160.0] - 2026-10-14
 
 ### Added

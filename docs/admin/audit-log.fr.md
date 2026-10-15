@@ -40,10 +40,7 @@ Le sous-onglet **Sécurité et administration** liste une entrée par action aya
 - inscriptions, ainsi que les mots de passe définis, réinitialisés ou modifiés ;
 - emprunt de rôle — un administrateur qui démarre puis arrête **Voir en tant que rôle…** ;
 - les actions administratives — modifications des utilisateurs, des rôles, des paramètres, du métamodèle, des tags, des calculs, des extensions, des imports, des intégrations, des portails publics et des diagrammes publiés, des enquêtes et de l'accès opérateur (voir [Actions administratives](#administrative-actions)) ;
-- les exports de ce journal lui-même.
-
-!!! note "Dans la prochaine version"
-    Les **exports de données** (exports CSV/JSON de l'inventaire, exports de workspace et de migration) seront enregistrés dans ce même journal dans la prochaine version.
+- les exports de données — les exports CSV et JSON de fiches, les exports d'espace de travail et les exports vers une autre plateforme EA (voir [Exports de données](#data-exports)) — ainsi que les exports de ce journal lui-même.
 
 ### Colonnes
 
@@ -68,11 +65,17 @@ Le panneau de filtres à gauche restreint la liste par **catégorie**, **résult
 
 Une recherche sur une adresse e-mail porte sur l'acteur, le sujet et la cible : saisir une seule adresse retrouve à la fois ce que cette personne a fait et ce qui a été tenté contre son compte.
 
-### Détails d'une entrée
+### Lire une entrée
 
-Cliquez sur une ligne pour ouvrir le panneau de l'entrée. Il affiche chaque champ, y compris l'agent utilisateur du navigateur et les **détails** enregistrés avec l'entrée — le code de motif d'une connexion échouée, l'heure de fin d'un verrouillage, le fournisseur d'identité d'une connexion SSO. Lorsqu'une entrée enregistre une modification, les détails s'affichent sous forme de tableau des anciennes et nouvelles valeurs. Les secrets ne sont jamais stockés : un mot de passe, un jeton ou un secret client est remplacé par `***` avant l'écriture de l'entrée.
+Cliquez sur une ligne pour ouvrir le panneau de l'entrée. Il affiche chaque champ de l'entrée — quand, qui, depuis quelle adresse IP et quel navigateur — et, sous **Détails**, ce que l'entrée a enregistré, rédigé en langage clair plutôt qu'en clés techniques :
 
-Les éléments qui situent une modification sans en faire partie — l'adresse actuelle d'un portail et s'il est publié, le remplacement ou non des identifiants d'une connexion, les types couverts par un mappage de migration — sont listés sous **Contexte**, sous le tableau.
+- **Modifications** — une phrase par modification. La modification d'un type de fiche se lit par exemple *Champ « Criticité métier » (Sélection unique) ajouté à la section « Gouvernance »* ou *Option « Élevée » du champ « Criticité métier » renommée en « Critique »*. Les champs, sections, options, rôles et portails sont désignés par leur libellé, les autorisations par leur description et les langues par leur nom.
+- **Avant / Après** — un tableau des valeurs modifiées, une ligne par champ, chaque champ désigné par son libellé. Les valeurs sont mises en forme : Oui ou Non, dates au format de date de l'espace de travail, couleurs sous forme de pastille, tailles de fichier en Ko ou Mo. Les secrets ne sont jamais stockés : un mot de passe, un jeton ou un secret client est remplacé avant l'écriture de l'entrée et s'affiche comme **Valeur secrète**.
+- **Contexte** — les éléments qui situent une modification sans en faire partie : l'adresse actuelle d'un portail et s'il est publié, le remplacement ou non des identifiants d'une connexion, le nombre de lignes traitées par un import.
+
+Une connexion échouée affiche son **Motif** au-dessus des détails — un mot de passe erroné, un compte inconnu, un compte temporairement verrouillé.
+
+Les entrées écrites avant la version 2.161.0 affichent leurs détails tels qu'ils ont été enregistrés : les anciennes et nouvelles valeurs apparaissent toujours dans le tableau, et ce que le panneau ne sait pas lire s'affiche en JSON brut.
 
 Le panneau ne propose aucune action. Les entrées ne peuvent être ni modifiées ni supprimées.
 
@@ -99,7 +102,6 @@ Le panneau ne propose aucune action. Les entrées ne peuvent être ni modifiées
 | `auth.password.changed` | un utilisateur connecté modifie son propre mot de passe |
 | `auth.impersonation.started` | un administrateur démarre **Voir en tant que rôle…**. La cible est le rôle choisi |
 | `auth.impersonation.stopped` | l'administrateur revient à son propre rôle |
-| `access.audit_log.exported` | quelqu'un exporte le journal de sécurité en CSV |
 
 **Codes de motif** de `auth.login.failed` :
 
@@ -151,11 +153,23 @@ Un enregistrement qui ne change rien n'est pas consigné, pas plus qu'un utilisa
 | **Enquêtes** | `admin.survey.sent`, `admin.survey.closed` | Une enquête envoyée à ses destinataires, ou clôturée |
 | **Accès opérateur** | `admin.ops.rescue_access.granted`, `.revoked` | Accès de secours accordé ou révoqué via l'[API d'exploitation](ops-api.md), enregistré à côté des événements `ops.*` existants |
 
+### Exports de données { #data-exports }
+
+Chaque fois que des données quittent l'instance en masse, une entrée `access` enregistre qui les a emportées, en quelle quantité et sous quelle forme. L'entrée est écrite avant l'envoi du fichier, si bien qu'un export dont le téléchargement n'a jamais abouti figure tout de même au journal.
+
+| Action | Enregistrée lorsque | Détails |
+|--------|---------------------|---------|
+| `access.export.cards` | des fiches sont exportées par l'export CSV ou JSON de l'API (`/cards/export/csv`, `/cards/export/json`), comme le font les scripts, les intégrations et les assistants IA | `format` (`csv` ou `json`), `type` (le ou les types de fiche) et `rows` (le nombre de fiches). La cible est le type de fiche lorsque l'export n'en couvrait qu'un seul |
+| `access.export.workspace` | un [paquet d'espace de travail](workspace-transfer.md) complet est téléchargé — depuis **Transfert d'espace de travail**, ou par un plan de contrôle via l'[API d'exploitation](ops-api.md), qui n'enregistre aucun acteur et `requested_by: ops` | `include_archived` et `size_bytes` |
+| `access.export.migration` | l'espace de travail est exporté vers une autre plateforme EA sous **Admin → Paramètres → Migration** (voir [Migration de plateforme](migration.md)) | La plateforme cible, `include_archived` et `size_bytes` |
+| `access.audit_log.exported` | quelqu'un exporte le journal de sécurité en CSV | `rows` |
+
 ## Ce qui n'est pas enregistré
 
 - **Le renouvellement du jeton.** L'application web renouvelle sa session à intervalle régulier : chaque onglet ouvert ajouterait des entrées, sans qu'aucune ne signifie quoi que ce soit.
 - **Les requêtes refusées pour un jeton de session expiré ou invalide.** Elles se produisent chaque fois qu'une session se termine normalement.
 - **Les lectures de flux OData.** Excel et Power BI interrogent le flux OData d'une vue sauvegardée selon un calendrier ; chaque actualisation ajouterait une entrée.
+- **Les classeurs et présentations construits dans le navigateur.** Les téléchargements Excel et PowerPoint de l'inventaire et des rapports sont produits à partir des données que la page a déjà chargées : ce sont des lectures, pas des exports depuis le serveur.
 - **Le simple accès en lecture** — ouvrir une fiche, exécuter un rapport, rechercher dans l'inventaire.
 
 ## Conservation { #retention }
@@ -188,7 +202,7 @@ Chaque ligne porte les mêmes champs que l'entrée :
 | `ip`, `user_agent` | Le client |
 | `origin` | web, api, mcp, ext, ops ou system |
 | `impersonator_user_id`, `impersonated_role` | Renseignés pendant qu'un administrateur consulte l'application sous un autre rôle |
-| `details` | Codes de motif et anciennes/nouvelles valeurs, secrets déjà masqués |
+| `details` | Jusqu'à quatre clés, secrets déjà masqués : `reason` (un code d'échec), `changes` (`{field: {old, new}}`), `items` (modifications sémantiques, `{kind, …}` — par ex. `field.added`) et `context` (faits simples) |
 
 Expédier ce flux vers un stockage central de journaux en conserve une copie hors de l'instance, hors de portée de quiconque peut l'administrer — c'est ce dont a besoin une revue des menaces internes. Voir [Journalisation et flux d'audit](operations.md#logging-and-the-audit-stream) pour le collecter.
 
@@ -198,4 +212,23 @@ La colonne **IP** enregistre l'adresse du client, et non celle du proxy placé d
 
 - **Laissez `TRUST_PROXY_HEADERS` activé** tant que chaque requête atteint le backend via le nginx fourni — la pile par défaut, le [chart Helm](kubernetes.md) et les [modèles de conteneurs managés](managed-containers.md) fonctionnent tous ainsi.
 - **Désactivez-le** (`TRUST_PROXY_HEADERS=false`) si vous exposez directement le conteneur backend, sans le nginx fourni devant lui : un client pourrait alors envoyer son propre `X-Real-IP` et choisir l'adresse enregistrée.
-- **Derrière un autre répartiteur de charge**, le nginx fourni voit l'adresse de ce répartiteur, et chaque entrée l'enregistre. Un paramètre permettant à nginx de faire confiance à l'adresse client transmise par votre répartiteur de charge (`NGINX_TRUSTED_PROXIES`) est prévu dans une version ultérieure.
+- **Derrière un répartiteur de charge, un contrôleur d'ingress ou un CDN**, le nginx fourni reçoit chaque connexion de cet intermédiaire et enregistre donc, à lui seul, l'adresse du répartiteur pour chaque utilisateur. Définissez **`NGINX_TRUSTED_PROXIES`** sur le conteneur nginx, comme décrit ci-dessous.
+
+### Derrière un répartiteur de charge { #behind-a-load-balancer }
+
+`NGINX_TRUSTED_PROXIES` liste les adresses des intermédiaires placés devant le nginx fourni, sous forme d'adresses IP ou de plages CIDR séparées par des virgules ou des espaces. nginx lit alors l'adresse du client dans l'en-tête `X-Forwarded-For` qu'ajoutent ces intermédiaires — mais uniquement sur une connexion provenant de l'une des adresses listées — et ignore chaque adresse listée dans cet en-tête, si bien qu'une chaîne de proxys aboutit à la première adresse qui n'est pas l'une des vôtres. Cette adresse remplace celle de la connexion, et l'en-tête `X-Real-IP` que lit le backend la transmet telle quelle. Vide, la valeur par défaut, ne fait confiance à personne.
+
+Pour trouver la valeur, lisez le journal d'accès du nginx de bordure (`docker compose logs nginx`, `kubectl logs deployment/turbo-ea-nginx` ou la visionneuse de journaux de la plateforme) : l'adresse en début de chaque ligne est l'intermédiaire auquel faire confiance, et le dernier champ entre guillemets est l'en-tête `X-Forwarded-For` qu'il a envoyé.
+
+| Déploiement | Où le définir | Valeur typique |
+|-------------|---------------|----------------|
+| Docker Compose, les navigateurs atteignent nginx directement | — | Laisser vide |
+| Docker Compose derrière votre propre proxy inverse | `NGINX_TRUSTED_PROXIES` dans `.env` | L'adresse du proxy inverse, telle que nginx la voit |
+| [Kubernetes](kubernetes.md) derrière un contrôleur d'ingress | Valeur du chart `nginx.trustedProxies` | Le CIDR des pods du cluster, par exemple `10.244.0.0/16` |
+| [AWS ECS Fargate](managed-containers.md#aws-ecs-fargate) | `NginxTrustedProxies` / Terraform `nginx_trusted_proxies` | Les plages CIDR des sous-réseaux du répartiteur de charge |
+| [Azure Container Apps](managed-containers.md#azure-container-apps) | `nginxTrustedProxies` / Terraform `nginx_trusted_proxies` | Le sous-réseau d'infrastructure de l'environnement |
+| [Google Cloud Run](managed-containers.md#google-cloud-run) | `NGINX_TRUSTED_PROXIES` dans le manifeste / Terraform `nginx_trusted_proxies` | Les adresses que montre le journal d'accès |
+
+Gardez la liste aussi étroite que les intermédiaires eux-mêmes. Chaque adresse listée est crue lorsqu'elle désigne le client : une plage depuis laquelle vos utilisateurs se connectent — tout `10.0.0.0/8` sur un déploiement interne, par exemple — permettrait à n'importe lequel d'entre eux d'inscrire une autre adresse au journal. Sans réglage, la colonne affiche le répartiteur de charge : peu utile, mais jamais falsifié.
+
+La limite de débit des connexions compte les tentatives par adresse client à partir du même en-tête ; derrière un répartiteur de charge, ce réglage évite donc aussi que les échecs d'une personne ralentissent tous les autres. Cela vaut pour les connexions qui atteignent le backend par le nginx de périphérie ; le serveur MCP se connecte directement au backend, si bien que ses propres appels de connexion partagent toujours l'adresse du conteneur MCP.

@@ -1,6 +1,7 @@
 /**
- * Contract test: every action the backend records in the Security & admin log
- * has a label, in English and in every shipped locale.
+ * Contract test: every administrative action and data export the backend
+ * records in the Security & admin log has a label, in English and in every
+ * shipped locale.
  *
  * The catalogue is read off the backend source rather than hard-coded, so a new
  * `audit_log.record(action=...)` cannot ship without its label: every string
@@ -79,6 +80,10 @@ describeSourceScan("administrative action labels", () => {
     // Both arms of a conditional action.
     expect(actions).toContain("admin.extension.enabled");
     expect(actions).toContain("admin.extension.disabled");
+    // Data exports recorded through a helper's parameter default or constant.
+    expect(actions).toContain("access.export.cards");
+    expect(actions).toContain("access.export.workspace");
+    expect(actions).toContain("access.export.migration");
     // Permission keys share the prefix but are never actions.
     expect(actions).not.toContain("admin.users");
     expect(actions).not.toContain("admin.metamodel");

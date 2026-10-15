@@ -40,10 +40,7 @@ Die Unterregisterkarte **Sicherheit & Administration** listet einen Eintrag pro 
 - Registrierungen sowie das Festlegen, Zurücksetzen und Ändern von Passwörtern;
 - Rollenübernahme — eine Administratorin, die **Als Rolle anzeigen…** startet und beendet;
 - administrative Aktionen — Änderungen an Benutzern, Rollen, Einstellungen, dem Metamodell, Tags, Berechnungen, Erweiterungen, Importen, Integrationen, öffentlichen Portalen und veröffentlichten Diagrammen, Umfragen und dem Betreiberzugang (siehe [Administrative Aktionen](#administrative-actions));
-- Exporte dieses Protokolls selbst.
-
-!!! note "In der nächsten Version"
-    **Datenexporte** (CSV/JSON-Exporte des Inventars, Workspace- und Migrationsexporte) werden in der nächsten Version in diesem Protokoll erfasst.
+- Datenexporte — die CSV- und JSON-Exporte von Karten, Workspace-Exporte und Exporte für eine andere EA-Plattform (siehe [Datenexporte](#data-exports)) — sowie Exporte dieses Protokolls selbst.
 
 ### Spalten
 
@@ -68,11 +65,17 @@ Die Filterleiste links grenzt die Liste nach **Kategorie**, **Ergebnis**, **Akti
 
 Eine Suche nach einer E-Mail-Adresse trifft Akteur, betroffenes Konto und Ziel, sodass eine einzige Adresse sowohl findet, was diese Person getan hat, als auch, was gegen ihr Konto versucht wurde.
 
-### Eintragsdetails
+### Einen Eintrag lesen
 
-Klicken Sie auf eine Zeile, um die Eintragsleiste zu öffnen. Sie zeigt jedes Feld des Eintrags, einschließlich des User-Agents des Browsers und der mit ihm aufgezeichneten **Details** — den Grundcode einer fehlgeschlagenen Anmeldung, den Zeitpunkt, zu dem eine Sperre endet, den Identitätsanbieter einer SSO-Anmeldung. Zeichnet ein Eintrag eine Änderung auf, erscheinen die Details als Tabelle mit alten und neuen Werten. Geheimnisse werden nie gespeichert: Ein Passwort, Token oder Client-Secret wird vor dem Schreiben des Eintrags durch `***` ersetzt.
+Klicken Sie auf eine Zeile, um die Eintragsleiste zu öffnen. Sie zeigt jedes Feld des Eintrags — wann, wer, von welcher IP-Adresse und mit welchem Browser — und unter **Details**, was der Eintrag aufgezeichnet hat, in Klartext statt als gespeicherte Schlüssel:
 
-Angaben, die eine Änderung einordnen, ohne Teil von ihr zu sein — die aktuelle Adresse eines Portals und ob es veröffentlicht ist, ob die Zugangsdaten einer Verbindung ersetzt wurden, die Typen, die eine Migrationszuordnung abdeckt —, stehen unter **Kontext** unterhalb der Tabelle.
+- **Änderungen** — ein Satz pro Änderung. Die Bearbeitung eines Kartentyps lautet zum Beispiel *Feld „Geschäftskritikalität“ (Einfachauswahl) zum Abschnitt „Governance“ hinzugefügt* oder *Option „Hoch“ im Feld „Geschäftskritikalität“ umbenannt in „Kritisch“*. Felder, Abschnitte, Optionen, Rollen und Portale werden mit ihrer Bezeichnung genannt, Berechtigungen mit ihrer Beschreibung und Sprachen mit ihrem Namen.
+- **Vorher / Nachher** — eine Tabelle der geänderten Werte, eine Zeile pro Feld, jedes Feld mit seiner Bezeichnung. Die Werte sind formatiert: Ja oder Nein, Datumsangaben im Datumsformat des Arbeitsbereichs, Farben als Farbfeld, Dateigrößen in KB oder MB. Geheimnisse werden nie gespeichert: Ein Passwort, Token oder Client-Secret wird vor dem Schreiben des Eintrags ersetzt und als **Geheimer Wert** angezeigt.
+- **Kontext** — Angaben, die eine Änderung einordnen, ohne Teil von ihr zu sein: die aktuelle Adresse eines Portals und ob es veröffentlicht ist, ob die Zugangsdaten einer Verbindung ersetzt wurden, wie viele Zeilen ein Import betroffen hat.
+
+Eine fehlgeschlagene Anmeldung zeigt ihren **Grund** oberhalb der Details — ein falsches Passwort, ein unbekanntes Konto, ein vorübergehend gesperrtes Konto.
+
+Einträge, die vor Version 2.161.0 geschrieben wurden, zeigen ihre Details so, wie sie aufgezeichnet wurden: Alte und neue Werte erscheinen weiterhin in der Tabelle, und was die Leiste nicht lesen kann, wird als Roh-JSON angezeigt.
 
 Die Leiste bietet keine Aktionen. Einträge können weder bearbeitet noch gelöscht werden.
 
@@ -99,7 +102,6 @@ Die Leiste bietet keine Aktionen. Einträge können weder bearbeitet noch gelös
 | `auth.password.changed` | ein angemeldeter Benutzer sein eigenes Passwort ändert |
 | `auth.impersonation.started` | eine Administratorin **Als Rolle anzeigen…** startet. Ziel ist die gewählte Rolle |
 | `auth.impersonation.stopped` | die Administratorin zu ihrer eigenen Rolle zurückkehrt |
-| `access.audit_log.exported` | jemand das Sicherheitsprotokoll als CSV exportiert |
 
 **Grundcodes** bei `auth.login.failed`:
 
@@ -151,11 +153,23 @@ Eine Speicherung, die nichts ändert, wird nicht erfasst, ebenso wenig wie ein B
 | **Umfragen** | `admin.survey.sent`, `admin.survey.closed` | Eine Umfrage, die an ihre Empfänger gesendet oder geschlossen wird |
 | **Betreiberzugang** | `admin.ops.rescue_access.granted`, `.revoked` | Über die [Betriebs-API](ops-api.md) gewährter oder widerrufener Notfallzugang, erfasst neben den bestehenden `ops.*`-Ereignissen |
 
+### Datenexporte { #data-exports }
+
+Jedes Mal, wenn Daten die Instanz in großem Umfang verlassen, hält ein `access`-Eintrag fest, wer sie mitgenommen hat, wie viel und in welcher Form. Der Eintrag wird geschrieben, bevor die Datei gesendet wird, sodass auch ein Export, dessen Download nie abgeschlossen wurde, aufgezeichnet ist.
+
+| Aktion | Aufgezeichnet, wenn | Details |
+|--------|---------------------|---------|
+| `access.export.cards` | Karten über den CSV- oder JSON-Export der API (`/cards/export/csv`, `/cards/export/json`) exportiert werden, wie es Skripte, Integrationen und KI-Assistenten tun | `format` (`csv` oder `json`), `type` (der oder die Kartentypen) und `rows` (die Anzahl der Karten). Das Ziel ist der Kartentyp, wenn der Export genau einen umfasste |
+| `access.export.workspace` | ein vollständiges [Workspace-Paket](workspace-transfer.md) heruntergeladen wird — über **Workspace-Transfer** oder von einer Steuerungsebene über die [Betriebs-API](ops-api.md), die keinen Akteur und `requested_by: ops` aufzeichnet | `include_archived` und `size_bytes` |
+| `access.export.migration` | der Workspace unter **Admin → Einstellungen → Migration** für eine andere EA-Plattform exportiert wird (siehe [Plattformmigration](migration.md)) | Die Zielplattform, `include_archived` und `size_bytes` |
+| `access.audit_log.exported` | jemand das Sicherheitsprotokoll als CSV exportiert | `rows` |
+
 ## Was nicht aufgezeichnet wird
 
 - **Token-Erneuerung.** Die Web-App erneuert ihre Sitzung zeitgesteuert, sodass jede offene Registerkarte Einträge erzeugen würde, von denen keiner etwas bedeutet.
 - **Anfragen, die wegen eines abgelaufenen oder ungültigen Sitzungstokens abgewiesen werden.** Sie entstehen jedes Mal, wenn eine Sitzung regulär endet.
 - **Abrufe von OData-Feeds.** Excel und Power BI fragen den OData-Feed einer gespeicherten Ansicht zeitgesteuert ab, sodass jede Aktualisierung einen Eintrag erzeugen würde.
+- **Im Browser erstellte Tabellen und Präsentationen.** Die Excel- und PowerPoint-Downloads des Inventars und der Berichte entstehen aus Daten, die die Seite bereits geladen hat; sie sind Lesezugriffe, keine Exporte vom Server.
 - **Reiner Lesezugriff** — eine Karte öffnen, einen Bericht ausführen, das Inventar durchsuchen.
 
 ## Aufbewahrung { #retention }
@@ -188,7 +202,7 @@ Jede Zeile enthält dieselben Felder wie der Eintrag:
 | `ip`, `user_agent` | Der Client |
 | `origin` | web, api, mcp, ext, ops oder system |
 | `impersonator_user_id`, `impersonated_role` | Gesetzt, während eine Administratorin die App als andere Rolle betrachtet |
-| `details` | Grundcodes und alte/neue Werte, Geheimnisse bereits maskiert |
+| `details` | Bis zu vier Schlüssel, Geheimnisse bereits maskiert: `reason` (ein Fehlercode), `changes` (`{field: {old, new}}`), `items` (semantische Änderungen, `{kind, …}` — z. B. `field.added`) und `context` (einfache Angaben) |
 
 Wer den Stream in einen zentralen Log-Speicher überträgt, hält eine Kopie außerhalb der Instanz vor, außer Reichweite aller, die sie administrieren können — genau das braucht eine Prüfung auf Insider-Bedrohungen. Wie Sie ihn erfassen, steht unter [Protokollierung und der Audit-Stream](operations.md#logging-and-the-audit-stream).
 
@@ -198,4 +212,23 @@ Die Spalte **IP** zeichnet die Adresse des Clients auf, nicht die des Proxys vor
 
 - **Lassen Sie `TRUST_PROXY_HEADERS` eingeschaltet**, solange jede Anfrage das Backend über den mitgelieferten nginx erreicht — der Standard-Stack, das [Helm-Chart](kubernetes.md) und die [Vorlagen für verwaltete Container](managed-containers.md) arbeiten alle so.
 - **Schalten Sie es aus** (`TRUST_PROXY_HEADERS=false`), wenn Sie den Backend-Container direkt freigeben, ohne den mitgelieferten nginx davor: Ein Client könnte dann seinen eigenen `X-Real-IP` senden und die aufgezeichnete Adresse selbst wählen.
-- **Hinter einem weiteren Load Balancer** sieht der mitgelieferte nginx dessen Adresse, sodass jeder Eintrag diese aufzeichnet. Eine Einstellung, mit der nginx der von Ihrem Load Balancer weitergereichten Client-Adresse vertrauen kann (`NGINX_TRUSTED_PROXIES`), ist für eine spätere Version geplant.
+- **Hinter einem Load Balancer, einem Ingress-Controller oder einem CDN** erhält der mitgelieferte nginx jede Verbindung von diesem Zwischenglied und zeichnet daher von sich aus für jeden Benutzer die Adresse des Load Balancers auf. Setzen Sie **`NGINX_TRUSTED_PROXIES`** am nginx-Container wie unten beschrieben.
+
+### Hinter einem Load Balancer { #behind-a-load-balancer }
+
+`NGINX_TRUSTED_PROXIES` listet die Adressen der Zwischenglieder vor dem mitgelieferten nginx auf, als IP-Adressen oder CIDR-Bereiche, getrennt durch Kommas oder Leerzeichen. nginx liest die Client-Adresse dann aus dem Header `X-Forwarded-For`, den diese Zwischenglieder hinzufügen — aber nur bei einer Verbindung, die von einer der aufgeführten Adressen kommt — und überspringt dabei jede aufgeführte Adresse, sodass eine Kette von Proxys auf die erste Adresse hinausläuft, die nicht zu Ihnen gehört. Diese Adresse ersetzt die der Verbindung, und der Header `X-Real-IP`, den das Backend liest, trägt sie unverändert weiter. Leer, die Voreinstellung, vertraut niemandem.
+
+Den Wert finden Sie im Zugriffsprotokoll des Edge-nginx (`docker compose logs nginx`, `kubectl logs deployment/turbo-ea-nginx` oder die Protokollansicht der Plattform): Die Adresse am Anfang jeder Zeile ist das Zwischenglied, dem Sie vertrauen müssen, und das letzte Feld in Anführungszeichen ist der `X-Forwarded-For`-Header, den es gesendet hat.
+
+| Bereitstellung | Wo setzen | Typischer Wert |
+|----------------|-----------|----------------|
+| Docker Compose, Browser erreichen nginx direkt | — | Leer lassen |
+| Docker Compose hinter Ihrem eigenen Reverse Proxy | `NGINX_TRUSTED_PROXIES` in `.env` | Die Adresse des Reverse Proxys, wie nginx sie sieht |
+| [Kubernetes](kubernetes.md) hinter einem Ingress-Controller | Chart-Wert `nginx.trustedProxies` | Das Pod-CIDR des Clusters, zum Beispiel `10.244.0.0/16` |
+| [AWS ECS Fargate](managed-containers.md#aws-ecs-fargate) | `NginxTrustedProxies` / Terraform `nginx_trusted_proxies` | Die CIDR-Bereiche der Subnetze des Load Balancers |
+| [Azure Container Apps](managed-containers.md#azure-container-apps) | `nginxTrustedProxies` / Terraform `nginx_trusted_proxies` | Das Infrastruktur-Subnetz der Umgebung |
+| [Google Cloud Run](managed-containers.md#google-cloud-run) | `NGINX_TRUSTED_PROXIES` im Manifest / Terraform `nginx_trusted_proxies` | Die Adressen, die das Zugriffsprotokoll zeigt |
+
+Halten Sie die Liste so eng wie die Zwischenglieder selbst. Jeder aufgeführten Adresse wird geglaubt, wenn sie den Client benennt; ein Bereich, aus dem sich Ihre Benutzer verbinden — etwa ganz `10.0.0.0/8` bei einer internen Bereitstellung —, ließe jeden von ihnen eine andere Adresse ins Protokoll schreiben. Ohne Einstellung zeigt die Spalte den Load Balancer: nicht hilfreich, aber nie gefälscht.
+
+Die Ratenbegrenzung der Anmeldung zählt Versuche pro Client-Adresse aus demselben Header; hinter einem Load Balancer verhindert diese Einstellung also auch, dass die Fehlversuche einer Person alle anderen ausbremsen. Das gilt für Anmeldungen, die das Backend über den Edge-nginx erreichen; der MCP-Server meldet sich direkt beim Backend an, seine eigenen Anmeldeaufrufe teilen sich daher weiterhin die Adresse des MCP-Containers.
