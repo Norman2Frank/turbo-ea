@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DateField } from "@/components/DateField";
 import { PercentageInput } from "@/components/PercentageInput";
+import { BooleanField } from "@/components/BooleanField";
 import { useNavigate, useParams } from "react-router";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
@@ -449,15 +450,10 @@ export default function SurveyRespond() {
 
     if (field.type === "boolean") {
       return (
-        <FormControlLabel
-          control={
-            <Switch
-              checked={!!value}
-              onChange={(e) => setNewValue(field.key, e.target.checked)}
-            />
-          }
-          label={value ? t("common:labels.yes") : t("common:labels.no")}
-        />
+        // A Yes / No dropdown like the single-select below (#1266): an unset
+        // value used to read as "No". None is a non-answer — applying the
+        // survey leaves the card alone.
+        <BooleanField fullWidth value={value} onChange={(v) => setNewValue(field.key, v)} />
       );
     }
 

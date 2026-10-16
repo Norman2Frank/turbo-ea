@@ -71,6 +71,7 @@ import {
 } from "@/lib/dataQualityBands";
 import { exportToExcel, exportCurrentViewToExcel } from "./excelExport";
 import { dateColumnFilterDef } from "@/lib/dateColumnFilter";
+import { booleanColumnDef } from "./booleanColumn";
 import RelationCellPopover from "./RelationCellPopover";
 import ExtFieldCell from "./ExtFieldCell";
 import LinkifiedText from "@/components/LinkifiedText";
@@ -139,7 +140,7 @@ import { useCardSearch } from "@/hooks/useCardSearch";
 import { useTypeLabel, useRelationLabel, useFieldLabel, useOptionLabel, useSubtypeLabel } from "@/hooks/useResolveLabel";
 import OptionChip from "@/components/OptionChip";
 import { readableTextColor } from "@/lib/color";
-import { facetOptions, facetValues, isGroupableField } from "@/lib/fieldFacets";
+import { booleanOption, facetOptions, facetValues, isGroupableField } from "@/lib/fieldFacets";
 import { useAuth } from "@/hooks/useAuth";
 import { useThemeMode } from "@/hooks/useThemeMode";
 import { useIsRtl } from "@/hooks/useIsRtl";
@@ -2865,6 +2866,18 @@ export default function InventoryPage() {
       };
       return labels[v] || v;
     };
+    // A boolean column reads and edits like a single-select one (#1266): the
+    // green Yes / blue No pill, blank when unset. Its formatter only compares
+    // `p.node` to null — the editor-dropdown case of rule 1 above — and never
+    // dereferences it.
+    const boolLabels = { yes: t("common:labels.yes"), no: t("common:labels.no") };
+    const boolColumn = {
+      ...booleanColumnDef({ ...boolLabels, none: t("common:labels.none") }),
+      cellRenderer: (p: { value?: unknown }) => {
+        const opt = booleanOption(p.value, boolLabels);
+        return opt ? <OptionChip option={opt} value={opt.key} label={opt.label} /> : null;
+      },
+    };
 
     const cols: ColDef[] = [
       {
@@ -3409,6 +3422,7 @@ export default function InventoryPage() {
                 }
               : {}),
             ...(field.type === "date" ? dateColumnFilterDef : {}),
+            ...(field.type === "boolean" ? boolColumn : {}),
             // Extension-typed columns render through the fieldTypes registry
             // (same display component as card detail) and are never
             // grid-editable — the spread order deliberately overrides the
@@ -3467,6 +3481,7 @@ export default function InventoryPage() {
           ...(field.type === "url" ? urlCell : {}),
           ...(field.type === "percentage" ? percentageColumnDef : {}),
           ...(field.type === "date" ? dateColumnFilterDef : {}),
+          ...(field.type === "boolean" ? boolColumn : {}),
           ...(field.type.startsWith("ext.")
             ? {
                 cellRenderer: (p: { value: unknown }) => (

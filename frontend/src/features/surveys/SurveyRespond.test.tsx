@@ -351,10 +351,12 @@ describe("SurveyRespond — maintain fields", () => {
     const { user } = renderPage();
     await screen.findByText("Q3 Application Review");
 
-    // Boolean: the switch labelled with the current answer.
-    const cloud = fieldCard("Cloud Hosted");
-    await user.click(within(cloud).getByRole("checkbox", { name: tc("labels.no") }));
-    expect(within(cloud).getByRole("checkbox", { name: tc("labels.yes") })).toBeChecked();
+    // Boolean: a Yes / No dropdown, starting on the current answer (No).
+    const cloud = within(fieldCard("Cloud Hosted")).getByRole("combobox");
+    expect(cloud).toHaveTextContent(tc("labels.no"));
+    await user.click(cloud);
+    await user.click(await screen.findByRole("option", { name: tc("labels.yes") }));
+    expect(cloud).toHaveTextContent(tc("labels.yes"));
 
     // Date: the native input commits on change / blur.
     const date = within(fieldCard("Go-Live Date")).getByDisplayValue("2020-06-01");
@@ -380,6 +382,27 @@ describe("SurveyRespond — maintain fields", () => {
     expect(posted.goLiveDate).toEqual({ confirmed: false, new_value: "2021-03-15" });
     expect(posted.regions).toEqual({ confirmed: false, new_value: ["emea", "amer"] });
     expect(posted.coverage).toEqual({ confirmed: false, new_value: 90 });
+  });
+
+  it("shows an unanswered boolean with nothing chosen, not as No (#1266)", async () => {
+    mockApi.on("get", RESPOND_PATH, formWith([{ ...CLOUD, current_value: null }]));
+    const { user } = renderPage();
+    await screen.findByText("Q3 Application Review");
+
+    const box = within(fieldCard("Cloud Hosted")).getByRole("combobox");
+    expect(box).not.toHaveTextContent(tc("labels.no"));
+    expect(box).not.toHaveTextContent(tc("labels.yes"));
+    await user.click(box);
+    const listbox = await screen.findByRole("listbox");
+    expect(within(listbox).getByRole("option", { name: tc("labels.none") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    await user.click(within(listbox).getByRole("option", { name: tc("labels.no") }));
+    await user.click(submitButton());
+    await waitFor(() => expect(mockApi.callsOf("post", RESPOND_PATH)).toHaveLength(1));
+    expect(postedResponses().isCloud).toEqual({ confirmed: false, new_value: false });
   });
 
   it("clearing the percentage box stores null, not an empty string", async () => {

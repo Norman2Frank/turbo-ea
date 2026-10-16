@@ -103,6 +103,21 @@ export function facetOptions<O extends FacetOptionLike>(
   return (f.options ?? []).map((o, i) => ({ ...o, color: o.color || categoricalColor(i) }));
 }
 
+/**
+ * The option a boolean field's stored value reads as — the green Yes or the
+ * blue No that `facetOptions` defines — or `null` when it is unset. What every
+ * boolean pill (card detail, the portal, the Inventory column) renders.
+ */
+export function booleanOption(
+  raw: unknown,
+  labels: FacetLabels,
+): (FacetOptionLike & { color: string }) | null {
+  const b = booleanValueOf(raw);
+  if (b === null) return null;
+  const [yes, no] = facetOptions({ type: "boolean" }, labels);
+  return b ? yes : no;
+}
+
 /** A copy of `f` whose `options` are `facetOptions(f)`. Idempotent. */
 export function resolveFacetField<F extends FacetFieldLike>(f: F, labels: FacetLabels): F {
   return { ...f, options: facetOptions(f, labels) };
@@ -132,18 +147,31 @@ const LEGACY_TRUE = new Set(["true", "yes"]);
 const LEGACY_FALSE = new Set(["false", "no"]);
 
 /**
+ * A boolean field's stored value as one of its three states: `true`, `false`,
+ * or `null` for not set. Reads the legacy `"yes"` / `"no"` / `"true"` /
+ * `"false"` strings an import may have stored; anything else is not set.
+ * The one reading every boolean editor and the Inventory column share, so a
+ * value never shows as Yes in one place and Not set in another.
+ */
+export function booleanValueOf(raw: unknown): boolean | null {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw !== "string") return null;
+  const s = raw.trim().toLowerCase();
+  if (LEGACY_TRUE.has(s)) return true;
+  if (LEGACY_FALSE.has(s)) return false;
+  return null;
+}
+
+/**
  * A raw value as the option keys of field `f`. A boolean field also reads the
  * legacy `"yes"` / `"no"` / `"true"` / `"false"` strings an import may have
  * stored; any other value on a boolean field counts as not set.
  */
 export function facetValues(f: { type: string }, raw: unknown): string[] {
   if (f.type !== "boolean") return rawValues(raw);
-  if (typeof raw === "boolean") return [raw ? BOOL_TRUE : BOOL_FALSE];
-  if (typeof raw !== "string") return [];
-  const s = raw.trim().toLowerCase();
-  if (LEGACY_TRUE.has(s)) return [BOOL_TRUE];
-  if (LEGACY_FALSE.has(s)) return [BOOL_FALSE];
-  return [];
+  const b = booleanValueOf(raw);
+  if (b === null) return [];
+  return [b ? BOOL_TRUE : BOOL_FALSE];
 }
 
 /**
