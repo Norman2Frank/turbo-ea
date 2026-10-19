@@ -2,7 +2,7 @@ from datetime import date as date_type
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # --- Status Reports ---
 
@@ -82,16 +82,40 @@ class PpmCostLineOut(BaseModel):
 # --- Budget Lines ---
 
 
+def blank_description_to_none(value: str | None) -> str | None:
+    """A budget line's description is optional: a blank is "no description".
+
+    The dialog already sends ``null`` for an empty box; this keeps an API or
+    MCP caller from storing ``""`` as a second "nothing" state.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 class PpmBudgetLineCreate(BaseModel):
     fiscal_year: int
     category: Literal["capex", "opex"]
+    description: str | None = None
     amount: float = 0
+
+    @field_validator("description")
+    @classmethod
+    def _normalise_description(cls, value: str | None) -> str | None:
+        return blank_description_to_none(value)
 
 
 class PpmBudgetLineUpdate(BaseModel):
     fiscal_year: int | None = None
     category: Literal["capex", "opex"] | None = None
+    description: str | None = None
     amount: float | None = None
+
+    @field_validator("description")
+    @classmethod
+    def _normalise_description(cls, value: str | None) -> str | None:
+        return blank_description_to_none(value)
 
 
 class PpmBudgetLineOut(BaseModel):
@@ -99,6 +123,7 @@ class PpmBudgetLineOut(BaseModel):
     initiative_id: str
     fiscal_year: int
     category: str
+    description: str | None = None
     amount: float
     created_at: datetime
     updated_at: datetime
