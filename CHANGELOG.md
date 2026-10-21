@@ -5,6 +5,16 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.175.0] - 2026-10-21
+
+### Added
+- **Relation details in Mass Edit**: adding links in bulk for a relation type that carries details (flow direction, usage type, the create/read/update/delete flags…) sets them on every link, and re-running **Add link** over cards already linked updates their details without clearing the ones left empty ([#1293](https://github.com/vincentmakes/turbo-ea/issues/1293)).
+- **Mandatory relations scoped per subtype**: the subtype template dialog lists the card type's mandatory relations under **Relations not required for this subtype**, and a ticked one no longer blocks approval, lowers data quality or shows as **Required** for cards of that subtype; saving re-scores the type's cards at once ([#1296](https://github.com/vincentmakes/turbo-ea/issues/1296)).
+
+### Fixed
+- Changing which fields a subtype hides now re-scores the type's existing cards straight away, instead of leaving their data quality stale until each one is next edited.
+- Saving a subtype template, a field, a section, the card layout or the data-quality weights in the card-type editor now shows that it is saving and cannot be sent twice (the subtype template dialog used to need two clicks to close), a failed save is reported where you made it, and re-scoring a type's cards after such a change is much faster on large landscapes.
+
 ## [2.174.0] - 2026-10-21
 
 ### Added

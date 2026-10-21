@@ -10,6 +10,7 @@ import DialogActions from "@mui/material/DialogActions";
 import TextField from "@mui/material/TextField";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Switch from "@mui/material/Switch";
+import Checkbox from "@mui/material/Checkbox";
 import Chip from "@mui/material/Chip";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
@@ -34,7 +35,8 @@ import type {
 } from "@/types";
 import { emptyField } from "./helpers";
 import TypeColorPreview from "./TypeColorPreview";
-import { useSubtypeLabel } from "@/hooks/useResolveLabel";
+import { useRelationLabel, useSubtypeLabel, useTypeLabel } from "@/hooks/useResolveLabel";
+import { expandSides, sideFlags, sideKey } from "@/lib/relationSort";
 import FieldEditorDialog from "./FieldEditorDialog";
 import DataQualityPanel from "./DataQualityPanel";
 import StakeholderRolePanel from "./StakeholderRolePanel";
@@ -87,6 +89,8 @@ export default function TypeDetailDrawer({
   const { t, i18n } = useTranslation(["admin", "common"]);
   const locale = i18n.language;
   const stLabel = useSubtypeLabel();
+  const relLabel = useRelationLabel();
+  const typeLabel = useTypeLabel();
   const cardTypeKey = types.find((ct) => ct.key === typeKey) || null;
 
   /* --- Editable header state --- */
@@ -113,6 +117,15 @@ export default function TypeDetailDrawer({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [snack, setSnack] = useState("");
+  // One type-level write at a time (a subtype, a field, a section, the
+  // visibility). A write that changes the scoring configuration re-scores
+  // every card of the type on the server, which can take a moment on a large
+  // landscape, so while one is in flight the control that started it says so
+  // and no second write can start from the now-stale copy of the type. The
+  // ref is the guard (a second click can land before the re-render); the
+  // state drives the UI.
+  const [mutating, setMutating] = useState(false);
+  const mutatingRef = useRef(false);
 
   /* --- Subtype inline add --- */
   const [addSubOpen, setAddSubOpen] = useState(false);
@@ -128,7 +141,12 @@ export default function TypeDetailDrawer({
 
   /* --- Subtype template editor --- */
   const [editingSubtypeKey, setEditingSubtypeKey] = useState<string | null>(null);
+  // A failed template save shows inside the dialog, not behind the modal on
+  // the drawer.
+  const [subtypeError, setSubtypeError] = useState<string | null>(null);
   const [draftHiddenFields, setDraftHiddenFields] = useState<Set<string>>(new Set());
+  // Side keys of the mandatory relations the subtype being edited exempts (#1296).
+  const [draftOptionalRelations, setDraftOptionalRelations] = useState<Set<string>>(new Set());
 
   /* --- Translation dialog --- */
   const [translationDialogOpen, setTranslationDialogOpen] = useState(false);
@@ -150,6 +168,7 @@ export default function TypeDetailDrawer({
   const [editingSectionIdx, setEditingSectionIdx] = useState(0);
   const [editingFieldIdx, setEditingFieldIdx] = useState<number | null>(null);
   const [editingField, setEditingField] = useState<FieldDef>(emptyField());
+  const [fieldError, setFieldError] = useState<string | null>(null);
 
   /* --- Field deletion confirmation --- */
   const [deleteFieldConfirm, setDeleteFieldConfirm] = useState<{
@@ -167,6 +186,10 @@ export default function TypeDetailDrawer({
     fieldCount: number;
     cardCount: number | null; // null = loading
   } | null>(null);
+
+  // A failed field or section deletion, shown inside its confirmation dialog
+  // (only one of the two is ever open).
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   /* --- Add section --- */
 
@@ -221,6 +244,32 @@ export default function TypeDetailDrawer({
   }, [cardTypeKey, locale]);
 
   if (!cardTypeKey) return null;
+
+  /**
+   * PATCH the type and refresh. Refuses to start while another write is in
+   * flight; a failure goes to `onFailure` (the drawer alert, or the dialog the
+   * admin is looking at). Returns whether the write landed.
+   */
+  const runTypePatch = async (
+    body: Record<string, unknown>,
+    onFailure: (message: string) => void,
+    fallbackMessageKey: string,
+  ): Promise<boolean> => {
+    if (mutatingRef.current) return false;
+    mutatingRef.current = true;
+    setMutating(true);
+    try {
+      await api.patch(`/metamodel/types/${cardTypeKey.key}`, body);
+      onRefresh();
+      return true;
+    } catch (e: unknown) {
+      onFailure(e instanceof Error ? e.message : t(fallbackMessageKey));
+      return false;
+    } finally {
+      mutatingRef.current = false;
+      setMutating(false);
+    }
+  };
 
   /* --- Save header --- */
   const handleSaveHeader = async () => {
@@ -293,29 +342,20 @@ export default function TypeDetailDrawer({
   /* --- Subtypes --- */
   const handleAddSubtype = async () => {
     if (!newSubKey || !newSubLabel) return;
-    try {
-      const updated = [
-        ...(cardTypeKey.subtypes || []),
-        { key: newSubKey, label: newSubLabel, hidden_fields: [] },
-      ];
-      await api.patch(`/metamodel/types/${cardTypeKey.key}`, { subtypes: updated });
-      onRefresh();
+    const updated = [
+      ...(cardTypeKey.subtypes || []),
+      { key: newSubKey, label: newSubLabel, hidden_fields: [] },
+    ];
+    if (await runTypePatch({ subtypes: updated }, setError, "metamodel.typeDrawer.failedToAddSubtype")) {
       setNewSubKey("");
       setNewSubLabel("");
       setAddSubOpen(false);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("metamodel.typeDrawer.failedToAddSubtype"));
     }
   };
 
   const handleRemoveSubtype = async (subKey: string) => {
-    try {
-      const updated = (cardTypeKey.subtypes || []).filter((s) => s.key !== subKey);
-      await api.patch(`/metamodel/types/${cardTypeKey.key}`, { subtypes: updated });
-      onRefresh();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("metamodel.typeDrawer.failedToRemoveSubtype"));
-    }
+    const updated = (cardTypeKey.subtypes || []).filter((s) => s.key !== subKey);
+    await runTypePatch({ subtypes: updated }, setError, "metamodel.typeDrawer.failedToRemoveSubtype");
   };
 
   /* --- Subtype rename (#1291) ---
@@ -348,13 +388,8 @@ export default function TypeDetailDrawer({
     const subtypes = cardTypeKey.subtypes || [];
     const current = subtypes.find((st) => st.key === subKey);
     if (!current || current.label === next) return;
-    try {
-      const updated = subtypes.map((st) => (st.key === subKey ? { ...st, label: next } : st));
-      await api.patch(`/metamodel/types/${cardTypeKey.key}`, { subtypes: updated });
-      onRefresh();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("metamodel.typeDrawer.failedToRenameSubtype"));
-    }
+    const updated = subtypes.map((st) => (st.key === subKey ? { ...st, label: next } : st));
+    await runTypePatch({ subtypes: updated }, setError, "metamodel.typeDrawer.failedToRenameSubtype");
   };
 
   /* --- Subtype field visibility --- */
@@ -372,10 +407,40 @@ export default function TypeDetailDrawer({
     return acc;
   }, {});
 
+  // The mandatory relation sides of this type, one per side — a
+  // self-referencing type contributes two, under `<key>__out` / `<key>__in` —
+  // named by the verb read from this type's side, as card detail names them.
+  // Hidden relation types are not enforced (`missing_mandatory` skips them),
+  // so they are not offered.
+  const mandatoryRelationSides = expandSides(
+    relationTypes.filter((rt) => !rt.is_hidden),
+    cardTypeKey.key,
+  )
+    .filter(({ rt, isSource }) => sideFlags(rt, isSource).mandatory)
+    .map(({ rt, isSource }) => {
+      const otherKey = isSource ? rt.target_type_key : rt.source_type_key;
+      return {
+        key: sideKey(rt, isSource),
+        verb: relLabel(rt, !isSource),
+        otherLabel: typeLabel(types.find((tp) => tp.key === otherKey)) || otherKey,
+      };
+    });
+
   const openSubtypeTemplate = (subKey: string) => {
     const sub = (cardTypeKey.subtypes || []).find((s) => s.key === subKey);
     setDraftHiddenFields(new Set(sub?.hidden_fields ?? []));
+    setDraftOptionalRelations(new Set(sub?.optional_relations ?? []));
+    setSubtypeError(null);
     setEditingSubtypeKey(subKey);
+  };
+
+  const handleToggleOptionalRelation = (sideKeyValue: string) => {
+    setDraftOptionalRelations((prev) => {
+      const next = new Set(prev);
+      if (next.has(sideKeyValue)) next.delete(sideKeyValue);
+      else next.add(sideKeyValue);
+      return next;
+    });
   };
 
   const handleToggleFieldVisibility = (fieldKey: string) => {
@@ -388,17 +453,20 @@ export default function TypeDetailDrawer({
   };
 
   const handleSaveSubtypeTemplate = async () => {
-    if (!editingSubtypeKey) return;
+    if (!editingSubtypeKey || mutatingRef.current) return;
     const subtypes = (cardTypeKey.subtypes || []).map((s) => {
       if (s.key !== editingSubtypeKey) return s;
-      return { ...s, hidden_fields: [...draftHiddenFields] };
+      // A side ticked earlier whose relation is no longer mandatory is kept
+      // as stored: it is inert until the relation is made mandatory again.
+      return {
+        ...s,
+        hidden_fields: [...draftHiddenFields],
+        optional_relations: [...draftOptionalRelations],
+      };
     });
-    try {
-      await api.patch(`/metamodel/types/${cardTypeKey.key}`, { subtypes });
-      onRefresh();
+    setSubtypeError(null);
+    if (await runTypePatch({ subtypes }, setSubtypeError, "metamodel.typeDrawer.failedToSave")) {
       setEditingSubtypeKey(null);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("metamodel.typeDrawer.failedToSave"));
     }
   };
 
@@ -407,6 +475,7 @@ export default function TypeDetailDrawer({
     setEditingSectionIdx(sectionIdx);
     setEditingFieldIdx(null);
     setEditingField(emptyField());
+    setFieldError(null);
     setFieldDialogOpen(true);
   };
 
@@ -414,32 +483,31 @@ export default function TypeDetailDrawer({
     setEditingSectionIdx(sectionIdx);
     setEditingFieldIdx(fieldIdx);
     setEditingField({ ...cardTypeKey.fields_schema[sectionIdx].fields[fieldIdx] });
+    setFieldError(null);
     setFieldDialogOpen(true);
   };
 
   const handleSaveField = async (field: FieldDef) => {
-    try {
-      const schema: SectionDef[] = cardTypeKey.fields_schema.map((s) => ({
-        ...s,
-        fields: [...s.fields],
-      }));
-      if (editingFieldIdx !== null) {
-        schema[editingSectionIdx].fields[editingFieldIdx] = field;
-      } else {
-        schema[editingSectionIdx].fields.push(field);
-      }
-      await api.patch(`/metamodel/types/${cardTypeKey.key}`, {
-        fields_schema: schema,
-      });
-      onRefresh();
+    const schema: SectionDef[] = cardTypeKey.fields_schema.map((s) => ({
+      ...s,
+      fields: [...s.fields],
+    }));
+    if (editingFieldIdx !== null) {
+      schema[editingSectionIdx].fields[editingFieldIdx] = field;
+    } else {
+      schema[editingSectionIdx].fields.push(field);
+    }
+    setFieldError(null);
+    if (
+      await runTypePatch({ fields_schema: schema }, setFieldError, "metamodel.typeDrawer.failedToSaveField")
+    ) {
       setFieldDialogOpen(false);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("metamodel.typeDrawer.failedToSaveField"));
     }
   };
 
   const promptDeleteField = (sectionIdx: number, fieldIdx: number) => {
     const field = cardTypeKey.fields_schema[sectionIdx].fields[fieldIdx];
+    setDeleteError(null);
     setDeleteFieldConfirm({
       sectionIdx,
       fieldIdx,
@@ -455,22 +523,21 @@ export default function TypeDetailDrawer({
       .catch(() => setDeleteFieldConfirm((prev) => (prev ? { ...prev, cardCount: 0 } : null)));
   };
 
+  // The confirmation stays open, locked, until the write lands: that is where
+  // the admin is looking, so the saving state and a failure show there.
   const confirmDeleteField = async () => {
-    if (!deleteFieldConfirm) return;
+    if (!deleteFieldConfirm || mutatingRef.current) return;
     const { sectionIdx, fieldIdx } = deleteFieldConfirm;
-    setDeleteFieldConfirm(null);
-    try {
-      const schema: SectionDef[] = cardTypeKey.fields_schema.map((s) => ({
-        ...s,
-        fields: [...s.fields],
-      }));
-      schema[sectionIdx].fields.splice(fieldIdx, 1);
-      await api.patch(`/metamodel/types/${cardTypeKey.key}`, {
-        fields_schema: schema,
-      });
-      onRefresh();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("metamodel.typeDrawer.failedToDeleteField"));
+    const schema: SectionDef[] = cardTypeKey.fields_schema.map((s) => ({
+      ...s,
+      fields: [...s.fields],
+    }));
+    schema[sectionIdx].fields.splice(fieldIdx, 1);
+    setDeleteError(null);
+    if (
+      await runTypePatch({ fields_schema: schema }, setDeleteError, "metamodel.typeDrawer.failedToDeleteField")
+    ) {
+      setDeleteFieldConfirm(null);
     }
   };
 
@@ -480,6 +547,7 @@ export default function TypeDetailDrawer({
     const section = cardTypeKey.fields_schema[sectionIdx];
     if (!section || section.section === "__description") return;
     const fieldKeys = section.fields.map((f) => f.key);
+    setDeleteError(null);
     setDeleteSectionConfirm({
       sectionIdx,
       sectionName: section.section,
@@ -499,49 +567,45 @@ export default function TypeDetailDrawer({
   };
 
   const confirmDeleteSection = async () => {
-    if (!deleteSectionConfirm) return;
+    if (!deleteSectionConfirm || mutatingRef.current) return;
     const { sectionIdx } = deleteSectionConfirm;
-    setDeleteSectionConfirm(null);
-    try {
-      // Remove the section from fields_schema
-      const schema = cardTypeKey.fields_schema.filter((_, i) => i !== sectionIdx);
-      // Rebuild section_config.__order: remove the deleted custom:N key and re-index
-      const secCfg = (cardTypeKey.section_config || {}) as Record<string, unknown> & { __order?: string[] };
-      const customSections = cardTypeKey.fields_schema.filter((s) => s.section !== "__description");
-      const deletedCustomIdx = customSections.findIndex(
-        (s) => cardTypeKey.fields_schema.indexOf(s) === sectionIdx,
-      );
-      let newOrder = secCfg.__order as string[] | undefined;
-      if (newOrder && Array.isArray(newOrder)) {
-        // Remove the deleted key and re-index higher custom indices
-        newOrder = newOrder
-          .filter((k) => k !== `custom:${deletedCustomIdx}`)
-          .map((k) => {
-            if (k.startsWith("custom:")) {
-              const idx = parseInt(k.split(":")[1], 10);
-              if (idx > deletedCustomIdx) return `custom:${idx - 1}`;
-            }
-            return k;
-          });
-      }
-      await api.patch(`/metamodel/types/${cardTypeKey.key}`, {
-        fields_schema: schema,
-        section_config: { ...secCfg, __order: newOrder },
-      });
-      onRefresh();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("metamodel.typeDrawer.failedToDeleteSection"));
+    // Remove the section from fields_schema
+    const schema = cardTypeKey.fields_schema.filter((_, i) => i !== sectionIdx);
+    // Rebuild section_config.__order: remove the deleted custom:N key and re-index
+    const secCfg = (cardTypeKey.section_config || {}) as Record<string, unknown> & { __order?: string[] };
+    const customSections = cardTypeKey.fields_schema.filter((s) => s.section !== "__description");
+    const deletedCustomIdx = customSections.findIndex(
+      (s) => cardTypeKey.fields_schema.indexOf(s) === sectionIdx,
+    );
+    let newOrder = secCfg.__order as string[] | undefined;
+    if (newOrder && Array.isArray(newOrder)) {
+      // Remove the deleted key and re-index higher custom indices
+      newOrder = newOrder
+        .filter((k) => k !== `custom:${deletedCustomIdx}`)
+        .map((k) => {
+          if (k.startsWith("custom:")) {
+            const idx = parseInt(k.split(":")[1], 10);
+            if (idx > deletedCustomIdx) return `custom:${idx - 1}`;
+          }
+          return k;
+        });
     }
+    setDeleteError(null);
+    const saved = await runTypePatch(
+      { fields_schema: schema, section_config: { ...secCfg, __order: newOrder } },
+      setDeleteError,
+      "metamodel.typeDrawer.failedToDeleteSection",
+    );
+    if (saved) setDeleteSectionConfirm(null);
   };
 
   /* --- Hide / Unhide --- */
   const handleToggleHidden = async () => {
-    try {
-      await api.patch(`/metamodel/types/${cardTypeKey.key}`, { is_hidden: !cardTypeKey.is_hidden });
-      onRefresh();
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("metamodel.typeDrawer.failedToUpdateVisibility"));
-    }
+    await runTypePatch(
+      { is_hidden: !cardTypeKey.is_hidden },
+      setError,
+      "metamodel.typeDrawer.failedToUpdateVisibility",
+    );
   };
 
   /* --- Render --- */
@@ -595,13 +659,24 @@ export default function TypeDetailDrawer({
             </IconButton>
           </Tooltip>
           <Tooltip title={cardTypeKey.is_hidden ? t("metamodel.typeDrawer.unhideType") : t("metamodel.typeDrawer.hideType")}>
-            <IconButton size="small" onClick={handleToggleHidden}>
-              <MaterialSymbol
-                icon={cardTypeKey.is_hidden ? "visibility_off" : "visibility"}
-                size={20}
-                color={cardTypeKey.is_hidden ? "#f57c00" : "#999"}
-              />
-            </IconButton>
+            <span>
+              <IconButton
+                size="small"
+                aria-label={
+                  cardTypeKey.is_hidden
+                    ? t("metamodel.typeDrawer.unhideType")
+                    : t("metamodel.typeDrawer.hideType")
+                }
+                onClick={handleToggleHidden}
+                disabled={mutating}
+              >
+                <MaterialSymbol
+                  icon={cardTypeKey.is_hidden ? "visibility_off" : "visibility"}
+                  size={20}
+                  color={cardTypeKey.is_hidden ? "#f57c00" : "#999"}
+                />
+              </IconButton>
+            </span>
           </Tooltip>
           {/* A built-in type is only ever hidden (the seed restores it); the
               delete button stays visible but locked so the admin sees why. */}
@@ -631,7 +706,7 @@ export default function TypeDetailDrawer({
             variant="contained"
             size="small"
             onClick={handleSaveHeader}
-            disabled={saving}
+            disabled={saving || mutating}
           >
             {saving ? t("metamodel.typeDrawer.saving") : t("common:actions.save")}
           </Button>
@@ -639,6 +714,11 @@ export default function TypeDetailDrawer({
             <MaterialSymbol icon="close" size={22} />
           </IconButton>
         </Box>
+      </Box>
+
+      {/* A reserved strip, so the bar appearing does not shift the layout. */}
+      <Box sx={{ height: 4, flexShrink: 0 }}>
+        {mutating && <LinearProgress aria-label={t("metamodel.typeDrawer.saving")} />}
       </Box>
 
       {error && (
@@ -930,19 +1010,23 @@ export default function TypeDetailDrawer({
                         }
                         onClick={() => openSubtypeTemplate(s.key)}
                         onDelete={() => handleRemoveSubtype(s.key)}
+                        disabled={mutating}
                         variant={editingSubtypeKey === s.key ? "filled" : "outlined"}
                         color={editingSubtypeKey === s.key ? "primary" : "default"}
                         size="small"
                         icon={<MaterialSymbol icon="tune" size={16} />}
                       />
                       <Tooltip title={t("metamodel.typeDrawer.renameSubtype")}>
-                        <IconButton
-                          size="small"
-                          aria-label={t("metamodel.typeDrawer.renameSubtypeNamed", { name: s.label })}
-                          onClick={() => startRenameSubtype(s.key, s.label)}
-                        >
-                          <MaterialSymbol icon="edit" size={15} />
-                        </IconButton>
+                        <span>
+                          <IconButton
+                            size="small"
+                            aria-label={t("metamodel.typeDrawer.renameSubtypeNamed", { name: s.label })}
+                            onClick={() => startRenameSubtype(s.key, s.label)}
+                            disabled={mutating}
+                          >
+                            <MaterialSymbol icon="edit" size={15} />
+                          </IconButton>
+                        </span>
                       </Tooltip>
                     </Box>
                   );
@@ -971,8 +1055,8 @@ export default function TypeDetailDrawer({
                   sx={{ flex: 1 }}
                   error={!newSubLabel.trim()}
                 />
-                <Button size="small" variant="contained" onClick={handleAddSubtype} disabled={!newSubKey || !newSubLabel || !isValidKey(newSubKey)} sx={{ mt: "8px" }}>
-                  {t("common:actions.add")}
+                <Button size="small" variant="contained" onClick={handleAddSubtype} disabled={mutating || !newSubKey || !newSubLabel || !isValidKey(newSubKey)} sx={{ mt: "8px" }}>
+                  {mutating ? t("metamodel.typeDrawer.saving") : t("common:actions.add")}
                 </Button>
                 <IconButton size="small" onClick={() => { setAddSubOpen(false); setNewSubKey(""); setNewSubLabel(""); }} sx={{ mt: "8px" }}>
                   <MaterialSymbol icon="close" size={18} />
@@ -1058,9 +1142,22 @@ export default function TypeDetailDrawer({
         </DialogActions>
       </Dialog>
 
-      <Dialog open={!!deleteFieldConfirm} onClose={() => setDeleteFieldConfirm(null)} maxWidth="xs" fullWidth disableRestoreFocus>
+      <Dialog
+        open={!!deleteFieldConfirm}
+        onClose={() => {
+          if (!mutating) setDeleteFieldConfirm(null);
+        }}
+        maxWidth="xs"
+        fullWidth
+        disableRestoreFocus
+      >
         <DialogTitle>{t("metamodel.typeDrawer.deleteField")}</DialogTitle>
         <DialogContent>
+          {deleteError && (
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setDeleteError(null)}>
+              {deleteError}
+            </Alert>
+          )}
           {deleteFieldConfirm && (
             <>
               <Typography variant="body2" sx={{ mb: 2 }} dangerouslySetInnerHTML={{ __html: t("metamodel.typeDrawer.deleteFieldConfirm", { label: deleteFieldConfirm.fieldLabel, key: deleteFieldConfirm.fieldKey }) }} />
@@ -1079,22 +1176,37 @@ export default function TypeDetailDrawer({
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteFieldConfirm(null)}>{t("common:actions.cancel")}</Button>
+          <Button onClick={() => setDeleteFieldConfirm(null)} disabled={mutating}>
+            {t("common:actions.cancel")}
+          </Button>
           <Button
             variant="contained"
             color="error"
-            disabled={deleteFieldConfirm?.cardCount === null}
+            disabled={mutating || deleteFieldConfirm?.cardCount === null}
             onClick={confirmDeleteField}
           >
-            {t("metamodel.typeDrawer.deleteField")}
+            {mutating ? t("metamodel.typeDrawer.saving") : t("metamodel.typeDrawer.deleteField")}
           </Button>
         </DialogActions>
       </Dialog>
 
       {/* --- Section deletion confirmation dialog --- */}
-      <Dialog open={!!deleteSectionConfirm} onClose={() => setDeleteSectionConfirm(null)} maxWidth="xs" fullWidth disableRestoreFocus>
+      <Dialog
+        open={!!deleteSectionConfirm}
+        onClose={() => {
+          if (!mutating) setDeleteSectionConfirm(null);
+        }}
+        maxWidth="xs"
+        fullWidth
+        disableRestoreFocus
+      >
         <DialogTitle>{t("metamodel.typeDrawer.deleteSection")}</DialogTitle>
         <DialogContent>
+          {deleteError && (
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setDeleteError(null)}>
+              {deleteError}
+            </Alert>
+          )}
           {deleteSectionConfirm && (
             <>
               <Typography variant="body2" sx={{ mb: 2 }} dangerouslySetInnerHTML={{ __html: deleteSectionConfirm.fieldCount > 0
@@ -1118,14 +1230,16 @@ export default function TypeDetailDrawer({
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteSectionConfirm(null)}>{t("common:actions.cancel")}</Button>
+          <Button onClick={() => setDeleteSectionConfirm(null)} disabled={mutating}>
+            {t("common:actions.cancel")}
+          </Button>
           <Button
             variant="contained"
             color="error"
-            disabled={deleteSectionConfirm?.cardCount === null}
+            disabled={mutating || deleteSectionConfirm?.cardCount === null}
             onClick={confirmDeleteSection}
           >
-            {t("metamodel.typeDrawer.deleteSection")}
+            {mutating ? t("metamodel.typeDrawer.saving") : t("metamodel.typeDrawer.deleteSection")}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1137,7 +1251,11 @@ export default function TypeDetailDrawer({
         typeKey={cardTypeKey.key}
         fieldKey={editingField.key}
         isCalculated={calculatedFieldKeys.includes(editingField.key)}
-        onClose={() => setFieldDialogOpen(false)}
+        saving={mutating}
+        error={fieldError}
+        onClose={() => {
+          if (!mutating) setFieldDialogOpen(false);
+        }}
         onSave={handleSaveField}
       />
 
@@ -1167,7 +1285,9 @@ export default function TypeDetailDrawer({
       {/* --- Subtype template editor dialog --- */}
       <Dialog
         open={!!editingSubtypeKey}
-        onClose={() => setEditingSubtypeKey(null)}
+        onClose={() => {
+          if (!mutating) setEditingSubtypeKey(null);
+        }}
         maxWidth="sm"
         fullWidth
         disableRestoreFocus
@@ -1177,6 +1297,11 @@ export default function TypeDetailDrawer({
           {t("metamodel.typeDrawer.subtypeTemplate", { name: editingSubtype?.label ?? "" })}
         </DialogTitle>
         <DialogContent dividers>
+          {subtypeError && (
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setSubtypeError(null)}>
+              {subtypeError}
+            </Alert>
+          )}
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {t("metamodel.typeDrawer.subtypeTemplateHelp")}
           </Typography>
@@ -1214,11 +1339,52 @@ export default function TypeDetailDrawer({
               </Box>
             ))
           )}
+
+          {/* Mandatory relations this subtype does not need (#1296). */}
+          <Box sx={{ mt: 3 }} data-testid="subtype-optional-relations">
+            <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>
+              {t("metamodel.typeDrawer.optionalRelations")}
+            </Typography>
+            {mandatoryRelationSides.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                {t("metamodel.typeDrawer.noMandatoryRelations")}
+              </Typography>
+            ) : (
+              <>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  {t("metamodel.typeDrawer.optionalRelationsHelp")}
+                </Typography>
+                {mandatoryRelationSides.map((side) => (
+                  <FormControlLabel
+                    key={side.key}
+                    sx={{ display: "flex", ml: 0 }}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={draftOptionalRelations.has(side.key)}
+                        onChange={() => handleToggleOptionalRelation(side.key)}
+                      />
+                    }
+                    label={
+                      <Typography variant="body2">
+                        {side.verb}
+                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                          {side.otherLabel}
+                        </Typography>
+                      </Typography>
+                    }
+                  />
+                ))}
+              </>
+            )}
+          </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setEditingSubtypeKey(null)}>{t("common:actions.cancel")}</Button>
-          <Button variant="contained" onClick={handleSaveSubtypeTemplate}>
-            {t("common:actions.save")}
+          <Button onClick={() => setEditingSubtypeKey(null)} disabled={mutating}>
+            {t("common:actions.cancel")}
+          </Button>
+          <Button variant="contained" onClick={handleSaveSubtypeTemplate} disabled={mutating}>
+            {mutating ? t("metamodel.typeDrawer.saving") : t("common:actions.save")}
           </Button>
         </DialogActions>
       </Dialog>
