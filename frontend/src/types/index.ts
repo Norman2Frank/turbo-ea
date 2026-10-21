@@ -1831,6 +1831,8 @@ export interface PpmGanttItem {
   opex_actual: number;
   group_id: string | null;
   group_name: string | null;
+  /** Under a `subtype:<key>` grouping, the initiative that names its group (header only). */
+  group_anchor?: boolean;
   latest_report: PpmStatusReport | null;
   latest_report_id: string | null;
   stakeholders: PpmGanttStakeholder[];
@@ -1839,10 +1841,11 @@ export interface PpmGanttItem {
 
 /**
  * What a parent row on the PPM board shows in place of costs or dates it has
- * not got. The cost quartet is set only when the parent has no budget or cost
- * line of its own and some initiative beneath it has (and, on a portal, only
- * when the portal shows costs); the dates only when it has neither a start nor
- * an end date.
+ * not got. The planned pair is set only when the parent has no budget line of
+ * its own and some initiative beneath it has, the actual pair only when it has
+ * no cost line of its own and some initiative beneath it has (and, on a
+ * portal, either only when the portal shows costs); the dates only when it has
+ * neither a start nor an end date.
  */
 export interface PpmRollup {
   descendant_count: number;
@@ -1854,7 +1857,20 @@ export interface PpmRollup {
   end_date?: string | null;
 }
 
-/** `GET /ppm/initiatives/{id}/rollup`: always over the descendants alone. */
+/** One fiscal year beneath an initiative; `year` is null for undated cost lines. */
+export interface PpmRollupYear {
+  year: number | null;
+  capex_budget: number;
+  opex_budget: number;
+  capex_actual: number;
+  opex_actual: number;
+}
+
+/**
+ * `GET /ppm/initiatives/{id}/rollup`: always over the descendants alone.
+ * `has_budget_lines` / `has_cost_lines` describe the initiative itself;
+ * `by_year` is ascending with the undated entry last.
+ */
 export interface PpmRollupOut {
   descendant_count: number;
   capex_planned: number;
@@ -1865,6 +1881,9 @@ export interface PpmRollupOut {
   total_actual: number;
   start_date: string | null;
   end_date: string | null;
+  has_budget_lines: boolean;
+  has_cost_lines: boolean;
+  by_year: PpmRollupYear[];
 }
 
 export type PpmHealthValue = "onTrack" | "atRisk" | "offTrack";
@@ -1990,6 +2009,12 @@ export interface PpmPortfolioItem {
   /** Opaque on the public board; a card UUID on the authenticated one. */
   group_id: string | null;
   group_name: string | null;
+  /**
+   * Under a `subtype:<key>` grouping, the initiative that names its group: the
+   * board shows it as the group header and its figures as the group's bottom
+   * line, never as a row.
+   */
+  group_anchor?: boolean;
   capex_planned?: number | null;
   capex_actual?: number | null;
   opex_planned?: number | null;

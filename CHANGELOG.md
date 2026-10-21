@@ -5,6 +5,20 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.172.0] - 2026-10-20
+
+### Added
+- **Derived budget and costs on a PPM initiative's own pages**: when an initiative has no budget lines of its own, its **Overview** (total budget, budget bars, variance) and its **Budget & Costs** tab (summary bar and budget table) show the budget of the initiatives beneath it — in italic with a "from beneath" mark and a tooltip, and in the table as one read-only row per fiscal year under a caption. Actuals do the same from cost lines, with an **Undated** row for cost lines without a date. Recording a line of its own switches that side back; nothing is stored or added to the initiative's own figures, and only initiatives the reader can see count.
+- **Group the PPM portfolio by an Initiative subtype**: the **Group by** menu gains a second section listing the Initiative subtypes. Choosing one — say Program — shows one group per program, headed by the program and holding every initiative beneath it at any depth; the group's bottom line shows the program's own budget, actuals and dates, or the ones derived from beneath it, and initiatives with no program above them are Ungrouped. The Excel export lists the program first in its group, and a portfolio portal can open grouped by a subtype it publishes (`group_by=subtype:<key>`).
+- `GET /ppm/initiatives/{id}/rollup` now says whether the initiative has budget lines and cost lines of its own and splits the figures beneath it by fiscal year, and the calculated-field context gains `ppm.unscheduledCapexActual` / `ppm.unscheduledOpexActual`.
+
+### Changed
+- A parent on the PPM portfolio now derives its budget and its actuals separately: a program that holds the budget while its projects record the spend shows its own budget against their actuals. The tooltip names which half comes from beneath, and the Excel export gains a **Budget from** column beside **Costs from** and **Dates from**.
+- The Total Budget / Total Actual / Variance figures on an initiative's Overview and Budget & Costs summary bar now read in thousands or millions ("1.2 kCHF", "5.7 MCHF"), the unit the budget bars already use, so a figure with the "from beneath" mark no longer wraps; figures below a thousand and every table cell stay exact.
+
+### Fixed
+- The PPM portfolio's cost bars read both figures in one scale with a unit that matches it ("1.5/2.1 MCHF"), where a figure past a million used to render as "1.5M/2.1M kCHF" or "773/1.4M kCHF". The board's Total Budget KPI and the cost chart axes now abbreviate millions ("CHF12.0M") instead of "CHF12000k".
+
 ## [2.171.0] - 2026-10-20
 
 ### Added

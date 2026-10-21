@@ -13,7 +13,7 @@
 import type { PrintParam } from "@/features/reports/ReportShell";
 import { ALL_LEVELS } from "@/features/reports/portfolioGrouping";
 import type { ExportColumn, ReportExportData } from "@/features/reports/reportExport";
-import { typeLabel } from "@/hooks/useResolveLabel";
+import { subtypeLabel as resolveSubtypeLabel, typeLabel } from "@/hooks/useResolveLabel";
 import type { InlineEntityLike } from "@/hooks/useResolveLabel";
 import { buildChildIndex } from "@/lib/cardTree";
 import { toLocalDate } from "@/lib/dates";
@@ -23,7 +23,7 @@ import type {
   PpmPortfolioPerson,
   PpmRollup,
 } from "@/types";
-import { COST_BAR_COLOR, RAG, RAG_LABEL, RAG_NONE, costUnit, fmtK } from "./ppmPortfolioFormat";
+import { COST_BAR_COLOR, RAG, RAG_LABEL, RAG_NONE, costPair } from "./ppmPortfolioFormat";
 
 /** i18next's `t`, narrowed to the call shape the board uses. */
 export type Translate = (key: string, options?: Record<string, unknown>) => string;
@@ -75,8 +75,10 @@ export interface RowFigures {
   capexActual: number | null | undefined;
   opexPlanned: number | null | undefined;
   opexActual: number | null | undefined;
-  /** The costs are the total of the initiatives beneath (no lines of its own). */
-  derivedCosts: boolean;
+  /** The planned pair is the budget of the initiatives beneath (no budget lines of its own). */
+  derivedBudget: boolean;
+  /** The actual pair is the actuals of the initiatives beneath (no cost lines of its own). */
+  derivedActual: boolean;
   startDate: string | null | undefined;
   endDate: string | null | undefined;
   /** The dates span the initiatives beneath (no dates of its own). */
@@ -86,28 +88,45 @@ export interface RowFigures {
 }
 
 /**
- * A row's own costs and dates, unless the backend derived that part from the
- * initiatives beneath it (`rollup`, set only when the row has none of its
- * own). Costs and dates are decided independently: a program may carry its
- * own dates and still show its projects' costs.
+ * A row's own budget, actuals and dates, unless the backend derived that part
+ * from the initiatives beneath it (`rollup`, set per part only when the row
+ * has none of its own). The three are decided independently: a program that
+ * holds the budget while its projects record the spend shows its own budget
+ * against its projects' actuals.
  */
 export function rowFigures(item: PpmPortfolioItem): RowFigures {
   const rollup = item.rollup;
-  const costs: PpmRollup | PpmPortfolioItem =
+  const planned: PpmRollup | PpmPortfolioItem =
     rollup && rollup.capex_planned != null ? rollup : item;
+  const actual: PpmRollup | PpmPortfolioItem =
+    rollup && rollup.capex_actual != null ? rollup : item;
   const span: PpmRollup | PpmPortfolioItem =
     rollup && (rollup.start_date || rollup.end_date) ? rollup : item;
   return {
-    capexPlanned: costs.capex_planned,
-    capexActual: costs.capex_actual,
-    opexPlanned: costs.opex_planned,
-    opexActual: costs.opex_actual,
-    derivedCosts: costs !== item,
+    capexPlanned: planned.capex_planned,
+    capexActual: actual.capex_actual,
+    opexPlanned: planned.opex_planned,
+    opexActual: actual.opex_actual,
+    derivedBudget: planned !== item,
+    derivedActual: actual !== item,
     startDate: span.start_date,
     endDate: span.end_date,
     derivedDates: span !== item,
     descendantCount: rollup?.descendant_count ?? 0,
   };
+}
+
+/** The tooltip key naming which halves of a row's cost figures are derived, or null. */
+export type DerivedCostTipKey =
+  | "derivedBothTooltip"
+  | "derivedBudgetTooltip"
+  | "derivedActualTooltip";
+
+export function derivedCostTipKey(f: RowFigures): DerivedCostTipKey | null {
+  if (f.derivedBudget && f.derivedActual) return "derivedBothTooltip";
+  if (f.derivedBudget) return "derivedBudgetTooltip";
+  if (f.derivedActual) return "derivedActualTooltip";
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,9 +160,7 @@ export function costBarModel(
     overBudget: actual > planned && planned > 0,
     fillPct: Math.min(pct, 100),
     overPct: Math.min(pct, 130),
-    unit: costUnit(planned, actual, currency),
-    actualText: fmtK(actual),
-    plannedText: fmtK(planned),
+    ...costPair(actual, planned, currency),
   };
 }
 
@@ -278,14 +295,38 @@ export function visibleQuarterLabels(
 /*  Filters and groups                                                 */
 /* ------------------------------------------------------------------ */
 
-/** The distinct subtypes on the board, in first-seen order. */
+/**
+ * The `groupBy` value that groups the board by an Initiative subtype rather
+ * than by a related card type: `subtype:program` gives one group per Program,
+ * holding every initiative beneath it (the backend flags the program as the
+ * group's `group_anchor`).
+ */
+export const SUBTYPE_GROUP_PREFIX = "subtype:";
+
+/** The subtype key a `subtype:<key>` grouping names, else null (a card type key). */
+export function subtypeGroupKey(groupBy: string): string | null {
+  return groupBy.startsWith(SUBTYPE_GROUP_PREFIX)
+    ? groupBy.slice(SUBTYPE_GROUP_PREFIX.length)
+    : null;
+}
+
+/** The `groupBy` value grouping by the subtype `key`. */
+export const subtypeGroupBy = (key: string): string => `${SUBTYPE_GROUP_PREFIX}${key}`;
+
+/**
+ * The distinct subtypes of the board's rows, in first-seen order. A group's
+ * anchor is a header, not a row, so it offers nothing: grouping by Program
+ * would otherwise offer "Program" and filter the board down to no rows.
+ */
 export const subtypeKeys = (items: PpmPortfolioItem[]): string[] => [
-  ...new Set(items.flatMap((i) => (i.subtype ? [i.subtype] : []))),
+  ...new Set(items.flatMap((i) => (i.subtype && !i.group_anchor ? [i.subtype] : []))),
 ];
 
 /**
  * Initiatives whose name contains the search, in any case, and — when a
- * subtype is picked — of that subtype.
+ * subtype is picked — of that subtype. Both apply to the rows; a group's
+ * anchor is kept when a row of its group is, or when neither filter is set,
+ * so a filtered board never shows a header over nothing.
  */
 export function filterItems(
   items: PpmPortfolioItem[],
@@ -293,14 +334,25 @@ export function filterItems(
   subtype: string,
 ): PpmPortfolioItem[] {
   const s = search.toLowerCase();
-  return items.filter(
-    (i) => i.name.toLowerCase().includes(s) && (!subtype || i.subtype === subtype),
+  const matches = (i: PpmPortfolioItem) =>
+    i.name.toLowerCase().includes(s) && (!subtype || i.subtype === subtype);
+  const unfiltered = !s && !subtype;
+  const keptGroups = new Set(
+    items.filter((i) => !i.group_anchor && matches(i)).map((i) => i.group_id),
+  );
+  return items.filter((i) =>
+    i.group_anchor ? unfiltered || keptGroups.has(i.group_id) : matches(i),
   );
 }
 
 export interface PortfolioGroup {
   name: string;
   items: PpmPortfolioItem[];
+  /**
+   * The initiative naming the group under a subtype grouping — its header and
+   * its bottom line, never one of `items` — else null.
+   */
+  anchor: PpmPortfolioItem | null;
 }
 
 /** The id of the trailing group that holds initiatives with no group. */
@@ -309,7 +361,9 @@ export const UNGROUPED_ID = "__ungrouped";
 /**
  * Initiatives grouped by their related card, groups sorted by name, with the
  * ungrouped ones last under `noGroupLabel`. An initiative needs both a group
- * id and a name to join a group.
+ * id and a name to join a group. A `group_anchor` initiative becomes its
+ * group's `anchor` rather than one of its items, so a group may hold an
+ * anchor and no rows (a program with nothing beneath it still shows).
  */
 export function groupItems(
   items: PpmPortfolioItem[],
@@ -319,15 +373,18 @@ export function groupItems(
   const ungrouped: PpmPortfolioItem[] = [];
   for (const item of items) {
     if (item.group_id && item.group_name) {
-      const group = map.get(item.group_id) ?? { name: item.group_name, items: [] };
-      group.items.push(item);
+      const group = map.get(item.group_id) ?? { name: item.group_name, items: [], anchor: null };
+      if (item.group_anchor) group.anchor = item;
+      else group.items.push(item);
       map.set(item.group_id, group);
     } else {
       ungrouped.push(item);
     }
   }
   const result = [...map.entries()].sort((a, b) => a[1].name.localeCompare(b[1].name));
-  if (ungrouped.length) result.push([UNGROUPED_ID, { name: noGroupLabel, items: ungrouped }]);
+  if (ungrouped.length) {
+    result.push([UNGROUPED_ID, { name: noGroupLabel, items: ungrouped, anchor: null }]);
+  }
   return result;
 }
 
@@ -344,9 +401,18 @@ export function toggleCollapsed(prev: Set<string>, id: string): Set<string> {
 
 export { ALL_LEVELS };
 
-/** True when some initiative on the board names a parent that is on it too. */
-export const hasHierarchy = (items: PpmPortfolioItem[]): boolean =>
-  items.some((i) => !!i.parent_id);
+/**
+ * True when some row on the board names a parent that is a row too. A group's
+ * anchor is a header, not a row, so a child whose parent is the anchor has
+ * nothing to nest under: grouped by Program, the hierarchy switch appears only
+ * once something nests below the program's direct children.
+ */
+export function hasHierarchy(items: PpmPortfolioItem[]): boolean {
+  const rows = new Set<string | null | undefined>(
+    items.filter((i) => !i.group_anchor).map((i) => i.id),
+  );
+  return items.some((i) => !i.group_anchor && rows.has(i.parent_id));
+}
 
 /** One rendered row of a group shown as a tree. */
 export interface PortfolioRow {
@@ -464,7 +530,7 @@ export function subtypeSubGroups(
 ): [string, PortfolioGroup][] {
   return bucketBySubtype(items, subtypeOrder).map(([key, list]) => [
     subGroupId(groupId, key),
-    { name: subtypeLabel(key), items: list },
+    { name: subtypeLabel(key), items: list, anchor: null },
   ]);
 }
 
@@ -552,6 +618,24 @@ export function groupTypeLabel(
     : groupBy;
 }
 
+/**
+ * The grouping's display name: for a `subtype:<key>` grouping the subtype's
+ * label (the raw key when the metamodel does not define it), else the card
+ * type's (`groupTypeLabel`). It names the print line, the export's group
+ * column and an anchored group's bottom line.
+ */
+export function groupByLabel(
+  groupBy: string,
+  options: PpmPortfolioGroupOption[],
+  subtypeDefs: InlineEntityLike[],
+  locale: string,
+): string {
+  const key = subtypeGroupKey(groupBy);
+  if (key === null) return groupTypeLabel(options, groupBy, locale);
+  const def = subtypeDefs.find((d) => d.key === key);
+  return def ? resolveSubtypeLabel(def, locale) : key;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Print and export                                                   */
 /* ------------------------------------------------------------------ */
@@ -623,6 +707,7 @@ export interface ExportInput {
  * DOM. A withheld cost or person exports as an empty cell. A parent's costs
  * and dates are what the board shows for it, and the *Costs from* / *Dates
  * from* columns say whether that is its own data or the initiatives beneath.
+ * An anchored group's anchor is its first row, with no parent.
  */
 export function buildPortfolioExport(
   input: ExportInput,
@@ -644,6 +729,7 @@ export function buildPortfolioExport(
     { key: "opexPlanned", label: `${t("opex")} — ${t("planned")}`, type: "currency" },
     { key: "opexActual", label: `${t("opex")} — ${t("actual")}`, type: "currency" },
     { key: "lastReport", label: t("lastReport", { defaultValue: "Report" }), type: "date" },
+    { key: "budgetFrom", label: t("budgetFrom"), type: "text" },
     { key: "costsFrom", label: t("costsFrom"), type: "text" },
     { key: "datesFrom", label: t("datesFrom"), type: "text" },
   ];
@@ -659,7 +745,10 @@ export function buildPortfolioExport(
 
   const rows: Record<string, unknown>[] = [];
   for (const [, group] of input.groups) {
-    for (const item of groupRowsInOrder(group.items, layout)) {
+    // A group's anchor leads it, so the figures its bottom line shows on
+    // screen are in the workbook too.
+    const lead = group.anchor ? [group.anchor] : [];
+    for (const item of [...lead, ...groupRowsInOrder(group.items, layout)]) {
       const rep = item.latest_report;
       const f = rowFigures(item);
       const from = (derived: boolean) =>
@@ -667,7 +756,12 @@ export function buildPortfolioExport(
       rows.push({
         group: group.name,
         name: item.name,
-        ...(withParent ? { parent: (item.parent_id && names.get(item.parent_id)) || "" } : {}),
+        ...(withParent
+          ? {
+              parent:
+                (item !== group.anchor && item.parent_id && names.get(item.parent_id)) || "",
+            }
+          : {}),
         subtype: item.subtype ? subtypeLabel(item.subtype) : "",
         pm: projectManager(item.stakeholders)?.display_name || "",
         start: f.startDate || "",
@@ -680,7 +774,8 @@ export function buildPortfolioExport(
         opexPlanned: f.opexPlanned ?? "",
         opexActual: f.opexActual ?? "",
         lastReport: rep ? rep.report_date : "",
-        costsFrom: from(f.derivedCosts),
+        budgetFrom: from(f.derivedBudget),
+        costsFrom: from(f.derivedActual),
         datesFrom: from(f.derivedDates),
       });
     }
