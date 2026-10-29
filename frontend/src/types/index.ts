@@ -1,7 +1,6 @@
-export type DashboardTabKey = "overview" | "workspace" | "admin";
-
 export interface UiPreferences {
-  dashboard_default_tab?: DashboardTabKey;
+  /** Key of the dashboard the homepage opens on (a built-in or custom one). */
+  dashboard_default_tab?: string;
   // Enabled Draw.io "More Shapes" libraries the user chose to remember, in the
   // order Draw.io reports them. Restored as the embedded editor's `libs` param.
   diagram_libraries?: string[];
@@ -785,6 +784,163 @@ export interface DashboardData {
   lifecycle_distribution: Record<string, number>;
   recent_events: EventEntry[];
   trends?: DashboardTrends;
+}
+
+// ---------------------------------------------------------------------------
+// Editable homepage dashboards
+// ---------------------------------------------------------------------------
+
+/** Every widget type a dashboard may hold. Mirrors `WIDGET_TYPES` in
+ *  `backend/app/services/dashboard_defaults.py` (pinned by `registry.test.ts`). */
+export type WidgetType =
+  | "kpi"
+  | "chart"
+  | "recent_activity"
+  | "browse_by_type"
+  | "needs_attention"
+  | "my_favorites"
+  | "my_saved_reports"
+  | "my_roles"
+  | "my_todos"
+  | "my_pending_surveys"
+  | "my_created"
+  | "my_cards_activity"
+  | "top_contributors"
+  | "stakeholder_coverage"
+  | "idle_users"
+  | "approval_pipeline"
+  | "system_activity"
+  | "unassigned_todos"
+  | "stakeholder_directory";
+
+export interface WidgetLayout {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minW?: number;
+  minH?: number;
+}
+
+export interface DashboardWidget {
+  id: string;
+  type: WidgetType;
+  title: string | null;
+  config: Record<string, unknown>;
+  layout: WidgetLayout;
+}
+
+export interface Dashboard {
+  id: string;
+  key: string;
+  name: string;
+  translations: Record<string, string>;
+  description: string | null;
+  icon: string | null;
+  built_in: boolean;
+  is_hidden: boolean;
+  sort_order: number;
+  widgets: DashboardWidget[];
+  /** Present for managers only. `[]` means every role. */
+  allowed_roles?: string[];
+  can_manage: boolean;
+}
+
+/** `share` = the narrowed count as a percentage of the same query without its
+ *  approval / lifecycle / flag filters (no `metric_field`). */
+export type DashboardMetric = "count" | "sum" | "avg" | "share";
+
+/** `type`, `subtype`, `approval_status`, `lifecycle_phase`,
+ *  `data_quality_bucket`, `created_month`, `field:<key>`, `eol_coverage`,
+ *  `stakeholders`, `phase_month:<phase>`, `related:<rt>[__out|__in]`, or —
+ *  on a sankey side only — `card`. */
+export type DashboardDimension = string;
+
+export interface DashboardQuery {
+  card_type?: string | null;
+  group_by?: DashboardDimension | null;
+  group_by_2?: DashboardDimension | null;
+  metric?: DashboardMetric | null;
+  metric_field?: string | null;
+  approval_status?: string | null;
+  lifecycle_phase?: string | null;
+  subtype?: string | null;
+  relation_type?: string | null;
+  /** Comma-separated health / governance flags, canonical (sorted, unique):
+   *  `orphaned`, `stale`, `with_stakeholders`, `without_stakeholders`,
+   *  `eol_linked`, `eol_manual`, `eol_missing`, `related:<rt>`,
+   *  `unrelated:<rt>`. */
+  flags?: string | null;
+}
+
+export type DashboardChartKind =
+  | "bar"
+  | "column"
+  | "line"
+  | "pie"
+  | "donut"
+  | "gauge"
+  | "heatmap"
+  | "treemap"
+  | "sankey"
+  | "stacked_column";
+
+export interface DashboardKeyRow {
+  key: string;
+  value: number;
+}
+
+export interface DashboardFlowRow {
+  source: string;
+  target: string;
+  value: number;
+}
+
+export interface DashboardCellRow {
+  x: string;
+  y: string;
+  value: number;
+}
+
+export type DashboardQueryRow = DashboardKeyRow | DashboardFlowRow | DashboardCellRow;
+
+export interface DashboardQueryResult {
+  dimension: DashboardDimension | null;
+  dimension_2: DashboardDimension | null;
+  rows: DashboardQueryRow[];
+  total: number;
+  /** Card names of the keys of a card-keyed dimension (`related:`, a sankey
+   *  side on `card`), resolved through the caller's read scope. */
+  labels?: Record<string, string>;
+  /** Present when the metric sums or averages a cost field. */
+  fiscal_year?: number;
+  fiscal_year_start?: number;
+  /** Present when a card-keyed result kept only its `top` largest cards:
+   *  `cards` is how many more were folded into Other (a count or sum), or
+   *  dropped (an average or share, where a merged Other would be wrong). */
+  folded?: { top: number; cards: number };
+}
+
+export interface DashboardKpiTrend {
+  current?: number;
+  previous: number | null;
+  delta_abs: number | null;
+  delta_pct: number | null;
+  comparison_days: number;
+  snapshot_date?: string | null;
+}
+
+export interface DashboardKpi {
+  value: number;
+  trend: DashboardKpiTrend | null;
+  /** Count of the same query without its narrowing filters (count metric only). */
+  base?: number;
+  fiscal_year?: number;
+  fiscal_year_start?: number;
+}
+
+export interface DashboardKpiHistory {
+  points: { date: string; value: number }[];
 }
 
 // ---------------------------------------------------------------------------

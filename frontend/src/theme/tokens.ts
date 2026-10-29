@@ -110,6 +110,16 @@ export const HEALTH_COLORS = {
   bad: STATUS_COLORS.error,
 } as const;
 
+// ── EOL coverage (where a card's End-of-Life data comes from) ────────────
+// Deliberately not the EOL *status* palette: these say whether anything is
+// recorded at all, not how urgent an end of life is, so they avoid red/amber.
+
+export const EOL_COVERAGE_COLORS = {
+  linked: "#1976d2",
+  manual: "#3949ab",
+  missing: STATUS_COLORS.neutral,
+} as const;
+
 export const RAG_COLORS = {
   red: "#d32f2f",
   amber: "#f57c00",
@@ -285,10 +295,72 @@ export const CATEGORICAL_COLORS = [
   "#d32f2f",
 ] as const;
 
+// ── Dashboard charts (ECharts) ──────────────────────────────────────────
+
+/**
+ * Fixed-order categorical hues for dashboard charts, selected per mode (the
+ * dark column is the same eight hues stepped for the dark paper, not a flip).
+ * Assign by slot index in a fixed order, never cycled: a ninth category folds
+ * into "Other". The order is part of the colour-blind safety — validated with
+ * the dataviz palette script against `surface.*.paper` (light: worst adjacent
+ * CVD ΔE 9.1, normal-vision 19.6; dark: 8.4 / 19.3). Three light slots sit
+ * under 3:1 on white, so dashboard charts always carry a tooltip and a legend
+ * or direct labels. Status dimensions use their status tokens instead.
+ */
+export const CHART_CATEGORICAL = {
+  light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"],
+  dark: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"],
+} as const;
+
+/** Single-hue sequential ramp ends (low → high) for heatmaps and their
+ *  legend, per mode, anchored on the brand blue so a heatmap reads as the
+ *  app's own colour. Light: Material Blue 50 (`#e3f2fd`, recedes into the
+ *  white paper) → `brand.primary` (`#1976d2`, 4.6:1 on white). Dark: a deep
+ *  navy (`#1e3a5f`, recedes into the dark paper) → `brand.primaryLight`
+ *  (Material Blue 200), the brand's legible variant on dark surfaces. */
+export const CHART_SEQUENTIAL = {
+  light: ["#e3f2fd", brand.primary],
+  dark: ["#1e3a5f", brand.primaryLight],
+} as const;
+
+/** Accent colours of the homepage KPI tiles — the values the Overview,
+ *  My Workspace and Admin tiles have always used, named once here. */
+export const DASHBOARD_KPI_COLORS = {
+  total: brand.primary,
+  completion: STATUS_COLORS.success,
+  approved: RAG_COLORS.green,
+  broken: RAG_COLORS.amber,
+  favorites: "#f5a623",
+  stakeholders: brand.primary,
+  todos: "#43a047",
+  surveys: "#7b1fa2",
+  activeUsers: "#43a047",
+  noStakeholders: "#ef6c00",
+  overdue: RAG_COLORS.red,
+  stuck: "#7b1fa2",
+  /** Overall data quality: ≥ 75 %, ≥ 50 %, below. */
+  qualityGood: "#43a047",
+  qualityFair: "#f5a623",
+  qualityPoor: RAG_COLORS.red,
+} as const;
+
 // ── Non-color tokens ────────────────────────────────────────────────────
 
 /** Border radius scale (px). MUI's `borderRadius` `sx` prop also accepts numbers from the spacing scale. */
 export const radius = { sm: 4, md: 8, lg: 12 } as const;
+
+/**
+ * Shadows for an outlined card in an arrange mode (the dashboard's customize
+ * mode). `soft` is the resting cue that the card can be picked up and moved;
+ * `lifted` says it is in hand while it is dragged. Both are faint and widely
+ * diffused on purpose — a large blur at a low alpha reads as a card floating
+ * well above the page rather than a rim around it; the card keeps its
+ * outlined border, and the shadow only adds to it.
+ */
+export const CARD_SHADOW = {
+  soft: "0 8px 24px rgba(0, 0, 0, 0.06)",
+  lifted: "0 16px 40px rgba(0, 0, 0, 0.14)",
+} as const;
 
 /** Spacing aliases for the MUI scale (1 unit = 8px by default). */
 export const spacing = { xs: 0.5, sm: 1, md: 1.5, lg: 2, xl: 3 } as const;
