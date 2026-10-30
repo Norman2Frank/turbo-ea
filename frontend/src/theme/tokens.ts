@@ -126,6 +126,38 @@ export const RAG_COLORS = {
   green: "#2e7d32",
 } as const;
 
+/** End-of-life warning — an application, component or capability whose end of
+ *  life has passed or is near (reports, card lists, the Process Navigator
+ *  drawer) — orange 900. Not the BusinessProcess card-type colour, which
+ *  shares the value today. */
+export const EOL_WARNING_COLOR = "#e65100";
+
+// ── Print pages (a bare browser window outside the MUI theme) ────────────
+
+/** Inks of every print page the app opens in a new window (`lib/printDocument.ts`,
+ *  the BPM process-flow print): white paper, outside the MUI theme and dark mode. */
+export const PRINT_COLORS = {
+  text: "#333333",
+  muted: "#888888",
+  rule: "#dddddd",
+  panel: "#f5f5f5",
+  control: "#cccccc", // border of the secondary (Close) button, table rules
+  paper: "#ffffff", // also the text on a filled (fully-signed) badge
+  // The document print (`DOCUMENT_PRINT_CSS`): headings, body ink, the
+  // signature block's rule, cards and badges.
+  heading: "#1a1a2e", // h1 title
+  ink: "#222222", // body text
+  subheading: "#444444", // h3
+  inkSecondary: "#666666", // a signature's detail line
+  ruleLight: "#e0e0e0", // the rule above the signatures
+  panelLight: "#fafafa", // a pending signature card
+  success: "#2e7d32", // signed: badge text, fully-signed fill, approved status
+  successLight: "#66bb6a", // an approved signature card's border
+  successPale: "#f1f8e9", // an approved signature card's fill
+  successTint: "#e8f5e9", // the "signed" badge's fill
+  warning: "#ed6c02", // a pending signature's status
+} as const;
+
 // ── Notification-type accents (NotificationBell) ─────────────────────────
 // Categorical palette used only to visually differentiate notification
 // types in the bell dropdown — not a semantic status scale. Values reuse
@@ -363,6 +395,102 @@ export const DASHBOARD_KPI_COLORS = {
   qualityGood: "#43a047",
   qualityFair: "#f5a623",
   qualityPoor: RAG_COLORS.red,
+} as const;
+
+/** The BPM process-assessment trend: one categorical hue per scored
+ *  dimension, keyed by the assessment field it plots — not a status scale. */
+export const BPM_ASSESSMENT_COLORS = {
+  overall_score: brand.primary,
+  efficiency: "#4caf50",
+  effectiveness: "#ff9800",
+  compliance: "#9c27b0",
+  automation: "#00bcd4",
+} as const;
+
+// ── BPM ─────────────────────────────────────────────────────────────────
+// The BPM screens' own hues, kept at the values they have always rendered.
+// A token is referenced only where the hue IS that token's meaning (a data
+// object is the DataObject card); a hue that merely shares a value stays a literal.
+
+/** BPMN element-type icon colours, keyed by element family (resolved per
+ *  element type in `features/bpm/elementTypes.ts`). This is the BPMN icon
+ *  palette and is deliberately literal, not references to the brand, severity,
+ *  RAG or card-type tokens that happen to share a value today: re-tuning one of
+ *  those (e.g. correcting the BusinessProcess fallback to the seeded `#028f00`)
+ *  must not repaint a BPMN element. */
+export const BPMN_ELEMENT_COLORS = {
+  task: "#1976d2", // task, user task — blue 700
+  service: "#7b1fa2", // service task — purple 700
+  script: "#00695c", // script task — teal 800
+  rule: "#e65100", // business-rule task, boundary event — orange 900
+  messaging: "#0097a7", // send / receive task — cyan 700
+  manual: "#795548", // manual task — brown 500
+  subprocess: "#512da8", // call activity, sub-process, transaction, ad-hoc — deep purple 700
+  gateway: "#f57c00", // every gateway, intermediate events — orange 700
+  start: "#2e7d32", // start event — green 800
+  end: "#c62828", // end event — red 800
+  data: CARD_TYPE_COLORS.DataObject, // data object / data store references — #774fcc
+  unknown: "#999999", // an element type the app does not know yet
+} as const;
+
+/** A Process Navigator card with no value for the chosen colour overlay, or a value no option knows. */
+export const BPM_UNSET_COLOR = "#bdbdbd";
+
+/** The BusinessProcess type colour as seeded (`seed.py`): the called-process badge, its link dot
+ *  and the navigator header fallback, which also render where no metamodel is loaded (portals). */
+export const BPM_CALLED_PROCESS_COLOR = "#028f00";
+
+/** Fill the read-only BPMN viewer paints behind an automated task — green 50. */
+export const BPM_HIGHLIGHT_FILL = "#e8f5e9";
+
+/** Message-flow rows (Process Flow → Message flows) share the messaging elements' hue. */
+export const BPM_MESSAGE_FLOW_COLOR = BPMN_ELEMENT_COLORS.messaging;
+
+/** Process-flow accent — the diagram icon on a navigator card and its "published flow" state, and
+ *  the "Auto" chip on an automated step. Purple 700, the service-task hue, but a different meaning. */
+export const BPM_FLOW_ACCENT_COLOR = "#7b1fa2";
+
+/** Hue of the faint wash behind an automated step in the navigator's step list (drawn at 4 %
+ *  alpha) — deep purple 400. */
+export const BPM_AUTOMATED_STEP_TINT = "#7e57c2";
+
+/** Outline of a link dot on the BPMN canvas, so a pale card-type colour still reads on white. */
+export const BPM_LINK_DOT_OUTLINE = "rgba(0,0,0,0.25)";
+
+/** Process-type option colours as seeded (`seed.py` `PROCESS_TYPE_OPTIONS`): the fallback while
+ *  the metamodel loads. Literals that mirror the seed, deliberately not tied to the brand token
+ *  that happens to share a value. */
+export const BPM_PROCESS_TYPE_COLORS = {
+  core: "#1976d2", // blue 700
+  support: "#607d8b", // blue grey 500
+  management: "#9c27b0", // purple 500
+} as const;
+
+/** Dark-mode values for the `--bio-*` variables of `@bpmn-io/properties-panel`, whose stylesheet
+ *  ships light values only (applied in `features/bpm/bpmnStyles.ts`). The danger / warning /
+ *  focus variables are left alone: they are contrast colours that read on either surface. */
+export const BPMN_DARK_THEME = {
+  "--bio-surface": surface.dark.paper, // #1e1e1e
+  "--bio-surface-overlay": surface.dark.paper, // #1e1e1e
+  "--bio-surface-subtle": "#232323",
+  "--bio-surface-medium": "#2a2a2a",
+  "--bio-surface-strong": "#333333",
+  "--bio-surface-inverted": "#e0e0e0",
+  "--bio-text": "hsl(0, 0%, 92%)",
+  "--bio-text-subtle": "hsl(0, 0%, 72%)",
+  "--bio-text-subtlest": "hsl(0, 0%, 58%)",
+  "--bio-text-on-inverted": "hsl(0, 0%, 12%)",
+  "--bio-border": "hsl(0, 0%, 32%)",
+  "--bio-border-subtle": "hsl(0, 0%, 26%)",
+  "--bio-border-disabled": "hsl(0, 0%, 22%)",
+  "--bio-border-input": "hsl(0, 0%, 38%)",
+  "--bio-primary-surface": "hsl(205, 60%, 18%)",
+  "--bio-primary-surface-strong": "hsl(205, 60%, 26%)",
+  "--bio-danger-surface": "hsl(360, 50%, 22%)",
+  "--bio-danger-surface-subtle": "hsl(360, 40%, 16%)",
+  "--bio-warning-surface": "hsl(38, 50%, 18%)",
+  "--bio-shadow": "hsla(0, 0%, 0%, 60%)",
+  "--bio-shadow-subtle": "hsla(0, 0%, 0%, 35%)",
 } as const;
 
 // ── Non-color tokens ────────────────────────────────────────────────────

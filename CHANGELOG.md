@@ -5,6 +5,19 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.183.0] - 2026-10-30
+
+### Changed
+- The BPM dashboard's process-type, maturity and automation charts, the process assessment trend and the PPM cumulative cost charts are drawn with the same ECharts engine as the dashboards and reports; Recharts is no longer used by the application (the extension SDK keeps `loadRecharts` until UI SDK 2.0).
+
+### Fixed
+- BPM maturity and automation charts showed raw option keys (`fullyAutomated`, `defined`, …) instead of the translated option labels and dropped every other axis label; the maturity and risk chips in the top-risk table showed raw keys too.
+- The PPM cost charts lost their value-axis labels and clipped the budget-line labels in right-to-left locales.
+- Dates formatted by the workspace date format used the browser's language for the month name, so an Arabic (or German, …) interface showed English months and right-to-left pages read them in the wrong order; the month now follows the interface language.
+- The PPM cumulative cost charts labelled only every other month in right-to-left locales; every month is labelled.
+- The BPM dashboard's risk and maturity chips always used white text, unreadable on the yellow "Defined" maturity; the text colour now follows the chip's fill.
+- The BPM dashboard's risk chips fall back to the same severity scale as the Process Navigator when a risk level option has no colour (they previously used their own red/orange/green scale), and show the translated option label instead of the raw key. Process cards and drawers whose type or overlay colour is pale now show dark text and controls on the header instead of white.
+
 ## [2.182.0] - 2026-10-30
 
 ### Added
