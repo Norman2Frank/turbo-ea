@@ -1980,6 +1980,28 @@ export const DOC_PAGES: PageDef[] = [
   // ── TurboLens: Dashboard ────────────────────────────────────────────────
   // /turbolens honours ?tab=, so no locale-dependent click is needed. The
   // overview KPIs are computed from card data — no AI run required.
+  // The data quality breakdown panel (#1334): a click on the header's
+  // score pill docks it, found by its test id so no label text is needed.
+  {
+    id: "63_card_data_quality_breakdown",
+    route: "/cards/{{cardId:sampleApp}}",
+    waitFor: "[data-testid='data-quality-pill']",
+    actions: [
+      { type: "wait", ms: 600 },
+      { type: "click", selector: "[data-testid='data-quality-pill']" },
+      { type: "wait", ms: 900 },
+    ],
+    filenames: {
+      en: "63_card_data_quality_breakdown",
+      de: "63_karte_datenqualitaet_aufschluesselung",
+      fr: "63_fiche_qualite_donnees_detail",
+      es: "63_ficha_calidad_datos_desglose",
+      it: "63_scheda_qualita_dati_dettaglio",
+      pt: "63_ficha_qualidade_dados_detalhamento",
+      zh: "63_card_data_quality_breakdown",
+      ru: "63_kartochka_kachestvo_dannyh_detalizatsiya",
+    },
+  },
   {
     id: "75_turbolens_dashboard",
     route: "/turbolens?tab=dashboard",
@@ -2268,6 +2290,33 @@ export const DOC_PAGES: PageDef[] = [
       pt: "95_admin_config_modulos",
       zh: "95_admin_settings_modules",
       ru: "95_admin_nastroyki_moduli",
+    },
+  },
+  // The Gamified data quality toggle (#1334 follow-up), centred like the
+  // modules shot; the capture run turns the setting on first so the chip reads On.
+  {
+    id: "95c_admin_settings_gamification",
+    route: "/admin/settings",
+    waitFor: ".MuiPaper-root",
+    actions: [
+      { type: "wait", ms: 800 },
+      {
+        type: "scroll",
+        target: i18nLabels("admin:settings.gamification.title")
+          .map((l) => `h6:has-text("${hasTextArg(l)}")`)
+          .join(", "),
+      },
+      { type: "wait", ms: 400 },
+    ],
+    filenames: {
+      en: "95c_admin_settings_gamification",
+      de: "95c_admin_einstellungen_gamification",
+      fr: "95c_admin_parametres_gamification",
+      es: "95c_admin_config_gamificacion",
+      it: "95c_admin_impostazioni_gamification",
+      pt: "95c_admin_config_gamificacao",
+      zh: "95c_admin_settings_gamification",
+      ru: "95c_admin_nastroyki_gamifikatsiya",
     },
   },
   {
