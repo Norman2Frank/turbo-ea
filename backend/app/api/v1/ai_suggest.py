@@ -55,7 +55,7 @@ def _provider_rejection_detail(exc: httpx.HTTPStatusError) -> str:
     except Exception:
         message = ""
     reason = message or exc.response.text[:200].strip() or "no detail"
-    return f"The AI provider rejected the request " f"(HTTP {exc.response.status_code}): {reason}"
+    return f"The AI provider rejected the request (HTTP {exc.response.status_code}): {reason}"
 
 
 def _get_ai_config(general: dict) -> dict:
