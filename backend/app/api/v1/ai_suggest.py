@@ -40,8 +40,8 @@ def _provider_rejection_detail(exc: httpx.HTTPStatusError) -> str:
     """Human-readable reason from a provider's HTTP error response.
 
     Both Anthropic and OpenAI-compatible providers answer refusals with a
-    JSON body of the form ``{"error": {"message": ...}}``. Falling back to the
-    raw text keeps unknown shapes readable too.
+    JSON body of the form ``{"error": {"message": ...}}``. If unavailable,
+    return a generic fallback instead of exposing raw provider response text.
     """
     message = ""
     try:
@@ -54,7 +54,7 @@ def _provider_rejection_detail(exc: httpx.HTTPStatusError) -> str:
                 message = err
     except Exception:
         message = ""
-    reason = message or exc.response.text[:200].strip() or "no detail"
+    reason = message.strip() or "no detail"
     return f"The AI provider rejected the request (HTTP {exc.response.status_code}): {reason}"
 
 
