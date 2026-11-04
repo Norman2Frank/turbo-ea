@@ -1,0 +1,51 @@
+name: Sync upstream main
+
+on:
+  schedule:
+    # Taeglich um 03:17 UTC (04:17 MEZ / 05:17 MESZ), um Lastspitzen zur vollen Stunde zu vermeiden
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync-upstream:
+    name: Sync vincentmakes/turbo-ea:main -> main
+    runs-on: ubuntu-latest
+    steps:
+      # Token der dedizierten Sync-GitHub-App; nur diese App steht auf der
+      # Bypass-Liste des Rulesets fuer main und darf direkt nach main pushen.
+      - name: App-Token erzeugen
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ vars.SYNC_APP_ID }}
+          private-key: ${{ secrets.SYNC_APP_PRIVATE_KEY }}
+
+      - name: Checkout fork main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Merge upstream main
+        run: |
+          set -euo pipefail
+          git config user.name "turbo-ea-sync-bot[bot]"
+          git config user.email "5608425+turbo-ea-sync-bot[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/vincentmakes/turbo-ea.git
+          git fetch upstream main
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse upstream/main)" ]; then
+            echo "Bereits synchron mit upstream/main, kein Merge erforderlich."
+          else
+            git merge upstream/main --no-edit
+            git push origin main
+          fi
+
+      - name: Konflikthinweis
+        if: failure()
+        run: |
+          echo "::error::Merge von upstream/main fehlgeschlagen (vermutlich Konflikte). Bitte manuell synchronisieren: git fetch upstream && git merge upstream/main"
