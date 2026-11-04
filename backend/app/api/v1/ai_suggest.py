@@ -37,25 +37,15 @@ router = APIRouter(prefix="/ai", tags=["AI Suggestions"])
 
 
 def _provider_rejection_detail(exc: httpx.HTTPStatusError) -> str:
-    """Human-readable reason from a provider's HTTP error response.
+    """Safe client-facing detail for provider HTTP rejections.
 
-    Both Anthropic and OpenAI-compatible providers answer refusals with a
-    JSON body of the form ``{"error": {"message": ...}}``. Falling back to the
-    raw text keeps unknown shapes readable too.
+    Avoid reflecting provider-supplied body content because it may contain
+    request-derived sensitive data. Keep full diagnostics in server logs.
     """
-    message = ""
-    try:
-        data = exc.response.json()
-        if isinstance(data, dict):
-            err = data.get("error")
-            if isinstance(err, dict):
-                message = str(err.get("message", ""))
-            elif isinstance(err, str):
-                message = err
-    except Exception:
-        message = ""
-    reason = message or exc.response.text[:200].strip() or "no detail"
-    return f"The AI provider rejected the request " f"(HTTP {exc.response.status_code}): {reason}"
+    return (
+        f"The AI provider rejected the request (HTTP {exc.response.status_code}). "
+        "Please retry later or contact support."
+    )
 
 
 def _get_ai_config(general: dict) -> dict:
