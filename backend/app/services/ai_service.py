@@ -605,7 +605,6 @@ async def _call_anthropic(
         "model": model,
         "max_tokens": 4096,
         "messages": chat_messages,
-        "temperature": 0.1,
     }
     if system_text:
         payload["system"] = system_text
@@ -613,6 +612,16 @@ async def _call_anthropic(
     try:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        # The provider was reached but refused the request: log status and
+        # body so refusals (invalid model, refused parameter, rate limit)
+        # are diagnosable instead of looking like a connectivity problem.
+        logger.warning(
+            "Anthropic API call failed: HTTP %s: %s",
+            exc.response.status_code,
+            exc.response.text[:300],
+        )
+        raise
     except httpx.HTTPError as exc:
         logger.warning("Anthropic API call failed: %s", type(exc).__name__)
         raise

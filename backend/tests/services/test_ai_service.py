@@ -958,6 +958,54 @@ class TestCallAnthropic:
                     [{"role": "user", "content": "test"}],
                 )
 
+    @pytest.mark.asyncio
+    async def test_payload_omits_temperature(self):
+        """vincentmakes/turbo-ea#1358: new Claude models reject the parameter."""
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"content": [{"type": "text", "text": "{}"}]}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("app.services.ai_service._get_llm_client") as mock_get:
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=mock_resp)
+
+            await _call_anthropic(
+                "https://api.anthropic.com",
+                "sk-ant-test",
+                "claude-haiku-5-5",
+                [{"role": "user", "content": "test"}],
+            )
+
+            payload = mock_client.post.call_args[1]["json"]
+            assert "temperature" not in payload
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_logs_status_and_body(self, caplog):
+        """vincentmakes/turbo-ea#1358: a refusal must not look like a connectivity problem."""
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        denied = httpx.Response(
+            400,
+            json={"error": {"message": "`temperature` is deprecated for this model."}},
+            request=request,
+        )
+
+        with patch("app.services.ai_service._get_llm_client") as mock_get:
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+            mock_client.post = AsyncMock(return_value=denied)
+
+            with pytest.raises(httpx.HTTPStatusError):
+                await _call_anthropic(
+                    "https://api.anthropic.com",
+                    "sk-ant-test",
+                    "claude-haiku-5-5",
+                    [{"role": "user", "content": "test"}],
+                )
+
+        assert "Anthropic API call failed: HTTP 400" in caplog.text
+        assert "`temperature` is deprecated for this model." in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # call_llm dispatcher

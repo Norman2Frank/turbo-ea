@@ -186,6 +186,25 @@ class TestSuggest:
         resp = await self._post(client, env["member"])
         assert resp.status_code == 502 and "Check server logs" in resp.json()["detail"]
 
+    async def test_provider_rejection_is_502_with_the_reason(self, client, db, env, fakes):
+        """vincentmakes/turbo-ea#1358: a refusal is not a connectivity problem."""
+        await ai_settings(db, provider_type="anthropic", api_key="sk-live")
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        fakes.suggest_error = httpx.HTTPStatusError(
+            "400 Bad Request",
+            request=request,
+            response=httpx.Response(
+                400,
+                json={"error": {"message": "`temperature` is deprecated for this model."}},
+                request=request,
+            ),
+        )
+        resp = await self._post(client, env["member"])
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert "rejected the request (HTTP 400)" in detail
+        assert "`temperature` is deprecated for this model." in detail
+
     async def test_happy_path_passes_the_configuration_through(self, client, db, env, fakes):
         await ai_settings(
             db, provider_type="anthropic", api_key="sk-live", enabledTypes=["Application"]
@@ -258,3 +277,61 @@ class TestPortfolioInsights:
         fakes.insight_error = ValueError("bad json")
         resp = await self._post(client, env["admin"])
         assert resp.status_code == 502 and "Check server logs" in resp.json()["detail"]
+
+    async def test_provider_rejection_is_502_with_the_reason(self, client, db, env, fakes):
+        """vincentmakes/turbo-ea#1358: a refusal is not a connectivity problem."""
+        await ai_settings(db, portfolioInsightsEnabled=True, provider_type="anthropic")
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        fakes.insight_error = httpx.HTTPStatusError(
+            "429 Too Many Requests",
+            request=request,
+            response=httpx.Response(
+                429, json={"error": {"message": "rate limit reached"}}, request=request
+            ),
+        )
+        resp = await self._post(client, env["admin"])
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert "rejected the request (HTTP 429)" in detail
+        assert "rate limit reached" in detail
+
+
+class TestProviderRejectionDetail:
+    """``_provider_rejection_detail`` reads the provider's error body."""
+
+    @staticmethod
+    def _exc(status: int, **response_kwargs) -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        return httpx.HTTPStatusError(
+            f"HTTP {status}",
+            request=request,
+            response=httpx.Response(status, request=request, **response_kwargs),
+        )
+
+    def test_error_dict_message(self):
+        exc = self._exc(400, json={"error": {"message": "boom"}})
+        assert (
+            ai_api._provider_rejection_detail(exc)
+            == "The AI provider rejected the request (HTTP 400): boom"
+        )
+
+    def test_error_plain_string(self):
+        exc = self._exc(429, json={"error": "rate limited"})
+        assert (
+            ai_api._provider_rejection_detail(exc)
+            == "The AI provider rejected the request (HTTP 429): rate limited"
+        )
+
+    def test_non_json_body_falls_back_to_raw_text(self):
+        exc = self._exc(502, text="<html>bad gateway</html>")
+        assert (
+            ai_api._provider_rejection_detail(exc)
+            == "The AI provider rejected the request (HTTP 502): <html>bad gateway</html>"
+        )
+
+    def test_empty_body_reports_no_detail(self):
+        exc = self._exc(500, text="")
+        assert (
+            ai_api._provider_rejection_detail(exc)
+            == "The AI provider rejected the request (HTTP 500): no detail"
+        )
