@@ -36,6 +36,28 @@ logger = logging.getLogger("turboea.ai")
 router = APIRouter(prefix="/ai", tags=["AI Suggestions"])
 
 
+def _provider_rejection_detail(exc: httpx.HTTPStatusError) -> str:
+    """Human-readable reason from a provider's HTTP error response.
+
+    Both Anthropic and OpenAI-compatible providers answer refusals with a
+    JSON body of the form ``{"error": {"message": ...}}``. Falling back to the
+    raw text keeps unknown shapes readable too.
+    """
+    message = ""
+    try:
+        data = exc.response.json()
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                message = str(err.get("message", ""))
+            elif isinstance(err, str):
+                message = err
+    except Exception:
+        message = ""
+    reason = message or exc.response.text[:200].strip() or "no detail"
+    return f"The AI provider rejected the request " f"(HTTP {exc.response.status_code}): {reason}"
+
+
 def _get_ai_config(general: dict) -> dict:
     """Resolve AI configuration from DB settings with env-var fallback."""
     ai = general.get("ai", {})
@@ -118,6 +140,12 @@ async def suggest(
             api_version=ai_cfg["api_version"],
             fields_schema=card_type.fields_schema or [],
         )
+    except httpx.HTTPStatusError as exc:
+        logger.warning("AI suggestion refused for '%s': %s", body.name, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=_provider_rejection_detail(exc),
+        ) from exc
     except httpx.HTTPError as exc:
         logger.warning("AI suggestion failed for '%s': %s", body.name, exc)
         raise HTTPException(
@@ -193,6 +221,12 @@ async def portfolio_insights(
             api_version=ai_cfg["api_version"],
             principles=principles,
         )
+    except httpx.HTTPStatusError as exc:
+        logger.warning("AI portfolio insights refused: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail=_provider_rejection_detail(exc),
+        ) from exc
     except httpx.HTTPError as exc:
         logger.warning("AI portfolio insights failed: %s", exc)
         raise HTTPException(
