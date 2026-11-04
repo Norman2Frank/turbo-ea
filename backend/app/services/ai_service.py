@@ -613,13 +613,16 @@ async def _call_anthropic(
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        # The provider was reached but refused the request: log status and
-        # body so refusals (invalid model, refused parameter, rate limit)
-        # are diagnosable instead of looking like a connectivity problem.
+        # The provider was reached but refused the request. Avoid logging raw
+        # response bodies because provider errors can include request-derived
+        # context. Log only non-sensitive diagnostics.
+        request_id = exc.response.headers.get("request-id", "-")
+        content_type = exc.response.headers.get("content-type", "-")
         logger.warning(
-            "Anthropic API call failed: HTTP %s: %s",
+            "Anthropic API call failed: HTTP %s (request-id=%s, content-type=%s)",
             exc.response.status_code,
-            exc.response.text[:300],
+            request_id,
+            content_type,
         )
         raise
     except httpx.HTTPError as exc:
