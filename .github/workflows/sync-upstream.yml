@@ -7,7 +7,7 @@
 # would silently drop every local commit.
 #
 # Token: the push to main runs with a GitHub App installation token minted
-# from the APP_ID / APP_PRIVATE_KEY repo secrets. The App must be installed
+# from the APP_CLIENT_ID / APP_PRIVATE_KEY repo secrets. The App must be installed
 # on this repository with repository permission "Contents: read/write"
 # (and must be allowed by any branch protection rule on main). The default
 # GITHUB_TOKEN stays read-only. The upstream fetch is anonymous (upstream is
@@ -36,8 +36,8 @@ jobs:
     steps:
       - name: Check App secrets are configured
         env:
-          client-id: ${{ secrets.APP_CLIENT_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          APP_CLIENT-ID: ${{ secrets.APP_CLIENT_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: |
           if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
             echo "::error::The APP_CLIENT_ID / APP_PRIVATE_KEY repo secrets are not set." \
