@@ -36,7 +36,7 @@ jobs:
     steps:
       - name: Check App secrets are configured
         env:
-          APP_CLIENT-ID: ${{ secrets.APP_CLIENT_ID }}
+          APP_CLIENT_ID: ${{ secrets.APP_CLIENT_ID }}
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: |
           if [ -z "$APP_CLIENT_ID" ] || [ -z "$APP_PRIVATE_KEY" ]; then
