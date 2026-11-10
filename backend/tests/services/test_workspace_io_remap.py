@@ -744,11 +744,379 @@ def test_a_portal_filter_id_is_translated_exactly_once():
     }
 
 
+OLD_TAG_2 = "eeeeeeee-0000-0000-0000-000000000002"
+NEW_TAG_2 = "ffffffff-0000-0000-0000-000000000002"
+UNKNOWN_TAG = "eeeeeeee-0000-0000-0000-000000000099"
+
+
+def _tag_ids() -> rm.IdMap:
+    ids = _ids()
+    ids.record(rm.TAGS, OLD_TAG_2, NEW_TAG_2)
+    return ids
+
+
+def test_query_tags_are_translated_at_every_node_and_an_unknown_one_dropped():
+    query = {
+        "type": "Organization",
+        "where": {"tags": [OLD_TAG.upper()], "subtype": ["bu"]},
+        "related": [
+            {
+                "relation": "relOrgToApp",
+                "type": "Application",
+                "where": {"tags": [UNKNOWN_TAG, OLD_TAG_2]},
+                "related": [
+                    {
+                        "relation": "relAppToITC",
+                        "type": "ITComponent",
+                        "where": {"lifecycle_phase": ["active"]},
+                    }
+                ],
+            }
+        ],
+    }
+    kw = {"name": "x", "query": query}
+    tally = rm.rewrite_bookmark_row(kw, _ctx(ids=_tag_ids()))
+    assert tally.counts == {rm.REMAPPED: 2, rm.UNRESOLVED: 1}
+    assert kw == {
+        "name": "x",
+        "query": {
+            "type": "Organization",
+            "where": {"tags": [NEW_TAG], "subtype": ["bu"]},
+            "related": [
+                {
+                    "relation": "relOrgToApp",
+                    "type": "Application",
+                    "where": {"tags": [NEW_TAG_2]},
+                    "related": [
+                        {
+                            "relation": "relAppToITC",
+                            "type": "ITComponent",
+                            "where": {"lifecycle_phase": ["active"]},
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    # The input is not mutated: the rewrite builds a new tree.
+    assert query["where"]["tags"] == [OLD_TAG.upper()]
+
+
+def test_a_query_tag_list_emptied_by_the_drop_goes_and_its_empty_where_with_it():
+    ids = _tag_ids()
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "type": "Application",
+            "where": {"tags": [UNKNOWN_TAG, "not-an-id"]},
+            "related": [
+                {
+                    "relation": "relAppToITC",
+                    "type": "ITComponent",
+                    "where": {"tags": [UNKNOWN_TAG], "subtype": ["saas"]},
+                }
+            ],
+        },
+        ids,
+        tally,
+    )
+    assert out == {
+        "type": "Application",
+        "related": [
+            {"relation": "relAppToITC", "type": "ITComponent", "where": {"subtype": ["saas"]}}
+        ],
+    }
+    assert tally.counts == {rm.UNRESOLVED: 3}
+
+
+def test_a_query_tag_that_maps_to_itself_is_kept_and_not_counted():
+    ids = rm.IdMap()
+    ids.record(rm.TAGS, OLD_TAG, OLD_TAG)
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids({"type": "A", "where": {"tags": [OLD_TAG]}}, ids, tally)
+    assert out == {"type": "A", "where": {"tags": [OLD_TAG]}}
+    assert tally.counts == {}
+
+
+def test_a_query_with_no_tags_or_a_malformed_shape_is_untouched():
+    ids = _tag_ids()
+    for value in (
+        None,
+        "junk",
+        ["junk"],
+        {"type": "A"},
+        {"type": "A", "where": {"subtype": ["x"]}},
+        {"type": "A", "where": "junk", "related": "junk"},
+        {"type": "A", "where": {"tags": "junk"}},
+        {"type": "A", "related": ["junk", {"type": "B", "where": None}]},
+    ):
+        tally = rm.RewriteTally()
+        assert rm.rewrite_card_query_ids(value, ids, tally) == value
+        assert tally.counts == {}
+    kw = {"query": None, "filters": {"tagIds": [OLD_TAG]}}
+    rm.rewrite_bookmark_row(kw, _ctx())
+    assert kw == {"query": None, "filters": {"tagIds": [NEW_TAG]}}
+
+
+def test_query_cards_are_translated_at_two_nodes_and_an_unknown_one_dropped():
+    query = {
+        "type": "Organization",
+        "where": {"cards": [OLD_A.upper()], "include_descendants": True, "tags": [OLD_TAG]},
+        "related": [
+            {
+                "relation": "relOrgToApp",
+                "type": "Application",
+                "where": {"cards": [OLD_C, OLD_B], "include_descendants": True},
+            }
+        ],
+    }
+    kw = {"name": "x", "query": query}
+    tally = rm.rewrite_bookmark_row(kw, _ctx())
+    # OLD_A, OLD_TAG and OLD_B remapped; OLD_C has no target.
+    assert tally.counts == {rm.REMAPPED: 3, rm.UNRESOLVED: 1}
+    assert kw == {
+        "name": "x",
+        "query": {
+            "type": "Organization",
+            "where": {"cards": [NEW_A], "include_descendants": True, "tags": [NEW_TAG]},
+            "related": [
+                {
+                    "relation": "relOrgToApp",
+                    "type": "Application",
+                    "where": {"cards": [NEW_B], "include_descendants": True},
+                }
+            ],
+        },
+    }
+    assert query["where"]["cards"] == [OLD_A.upper()]
+
+
+def test_a_query_card_list_emptied_by_the_drop_takes_include_descendants_with_it():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "type": "Application",
+            "where": {"cards": [OLD_C], "include_descendants": True},
+            "related": [
+                {
+                    "relation": "relAppToITC",
+                    "type": "ITComponent",
+                    "where": {
+                        "cards": ["not-an-id"],
+                        "include_descendants": True,
+                        "subtype": ["saas"],
+                    },
+                },
+                {
+                    "relation": "relAppToOrg",
+                    "type": "Organization",
+                    "where": {"cards": [OLD_B, OLD_C], "include_descendants": False},
+                },
+            ],
+        },
+        _ids(),
+        tally,
+    )
+    assert out == {
+        "type": "Application",
+        "related": [
+            {"relation": "relAppToITC", "type": "ITComponent", "where": {"subtype": ["saas"]}},
+            {
+                "relation": "relAppToOrg",
+                "type": "Organization",
+                "where": {"cards": [NEW_B], "include_descendants": False},
+            },
+        ],
+    }
+    assert tally.counts == {rm.UNRESOLVED: 3, rm.REMAPPED: 1}
+
+
+def test_a_negated_hop_that_loses_every_pick_is_removed_whole():
+    """Left in place, "has none of these cards" would become "has no card of
+    that type at all" — far narrower. Removing the hop (subtree included)
+    widens the view instead."""
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "type": "Organization",
+            "related": [
+                {
+                    "relation": "relOrgToApp",
+                    "type": "Application",
+                    "negate": True,
+                    "where": {"cards": [OLD_C], "include_descendants": True},
+                    "related": [{"relation": "relAppToITC", "type": "ITComponent"}],
+                },
+                {"relation": "relOrgToInit", "type": "Initiative", "where": {"subtype": ["x"]}},
+            ],
+        },
+        _ids(),
+        tally,
+    )
+    assert out == {
+        "type": "Organization",
+        "related": [
+            {"relation": "relOrgToInit", "type": "Initiative", "where": {"subtype": ["x"]}}
+        ],
+    }
+    assert tally.counts == {rm.UNRESOLVED: 1}
+
+
+def test_a_lone_negated_hop_that_loses_every_pick_takes_related_with_it():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "type": "Organization",
+            "where": {"subtype": ["x"]},
+            "related": [
+                {
+                    "relation": "relOrgToApp",
+                    "type": "Application",
+                    "negate": True,
+                    "where": {"cards": ["not-an-id"]},
+                }
+            ],
+        },
+        _ids(),
+        tally,
+    )
+    assert out == {"type": "Organization", "where": {"subtype": ["x"]}}
+    assert tally.counts == {rm.UNRESOLVED: 1}
+
+
+def test_a_negated_hop_with_a_surviving_pick_is_kept():
+    tally = rm.RewriteTally()
+    hop = {
+        "relation": "relOrgToApp",
+        "type": "Application",
+        "negate": True,
+        "where": {"cards": [OLD_C, OLD_B]},
+    }
+    out = rm.rewrite_card_query_ids({"type": "Organization", "related": [hop]}, _ids(), tally)
+    assert out == {
+        "type": "Organization",
+        "related": [{**hop, "where": {"cards": [NEW_B]}}],
+    }
+    assert tally.counts == {rm.UNRESOLVED: 1, rm.REMAPPED: 1}
+
+
+def test_a_positive_hop_that_loses_every_pick_keeps_the_hop_without_the_condition():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "type": "Organization",
+            "related": [
+                {"relation": "relOrgToApp", "type": "Application", "where": {"cards": [OLD_C]}},
+                {
+                    "relation": "relOrgToInit",
+                    "type": "Initiative",
+                    "negate": False,
+                    "where": {"cards": [OLD_C]},
+                },
+            ],
+        },
+        _ids(),
+        tally,
+    )
+    assert out == {
+        "type": "Organization",
+        "related": [
+            {"relation": "relOrgToApp", "type": "Application"},
+            {"relation": "relOrgToInit", "type": "Initiative", "negate": False},
+        ],
+    }
+    assert tally.counts == {rm.UNRESOLVED: 2}
+
+
+def test_a_negated_hop_losing_only_its_tags_is_kept():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "type": "Organization",
+            "related": [
+                {
+                    "relation": "relOrgToApp",
+                    "type": "Application",
+                    "negate": True,
+                    "where": {"tags": [UNKNOWN_TAG]},
+                }
+            ],
+        },
+        _ids(),
+        tally,
+    )
+    assert out == {
+        "type": "Organization",
+        "related": [{"relation": "relOrgToApp", "type": "Application", "negate": True}],
+    }
+    assert tally.counts == {rm.UNRESOLVED: 1}
+
+
+def test_a_negate_flag_on_the_start_node_never_drops_the_query():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {"type": "A", "negate": True, "where": {"cards": [OLD_C]}}, _ids(), tally
+    )
+    assert out == {"type": "A", "negate": True}
+    assert tally.counts == {rm.UNRESOLVED: 1}
+
+
+def test_an_empty_related_list_stays_empty():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids({"type": "A", "related": []}, _ids(), tally)
+    assert out == {"type": "A", "related": []}
+
+
+def test_an_emptied_tag_list_keeps_include_descendants_for_the_cards_left():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "type": "A",
+            "where": {"tags": [UNKNOWN_TAG], "cards": [OLD_A], "include_descendants": True},
+        },
+        _ids(),
+        tally,
+    )
+    assert out == {"type": "A", "where": {"cards": [NEW_A], "include_descendants": True}}
+    assert tally.counts == {rm.UNRESOLVED: 1, rm.REMAPPED: 1}
+
+
+def test_a_query_card_that_maps_to_itself_is_kept_and_not_counted():
+    ids = rm.IdMap()
+    ids.record(rm.CARDS, OLD_A, OLD_A)
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids({"type": "A", "where": {"cards": [OLD_A]}}, ids, tally)
+    assert out == {"type": "A", "where": {"cards": [OLD_A]}}
+    assert tally.counts == {}
+
+
+def test_a_query_card_id_is_not_looked_up_in_the_tag_map_nor_a_tag_in_the_card_map():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {"type": "A", "where": {"cards": [OLD_TAG, OLD_A], "tags": [OLD_A, OLD_TAG]}},
+        _ids(),
+        tally,
+    )
+    assert out == {"type": "A", "where": {"cards": [NEW_A], "tags": [NEW_TAG]}}
+    assert tally.counts == {rm.UNRESOLVED: 2, rm.REMAPPED: 2}
+
+
+def test_a_query_with_junk_cards_or_an_empty_where_is_untouched():
+    for value in (
+        {"type": "A", "where": {"cards": "junk", "include_descendants": True}},
+        {"type": "A", "where": {}},
+    ):
+        tally = rm.RewriteTally()
+        assert rm.rewrite_card_query_ids(value, _ids(), tally) == value
+        assert tally.counts == {}
+
+
 def test_filter_rows_without_their_column_or_with_junk_are_untouched():
     for fn, col in (
         (rm.rewrite_survey_row, "target_filters"),
         (rm.rewrite_portal_row, "filters"),
         (rm.rewrite_bookmark_row, "filters"),
+        (rm.rewrite_bookmark_row, "query"),
     ):
         kw = {"name": "x"}
         assert fn(kw, _ctx()).counts == {}
@@ -924,3 +1292,231 @@ def test_stakeholder_answers_in_survey_responses_are_left_as_they_are():
     assert kw["responses"]["sh:observer"] == {"current_value": people, "new_value": people}
     assert kw["responses"]["relAppToOrg"] == {"new_value": [NEW_A]}
     assert tally.counts == {rm.REMAPPED: 1}
+
+
+def test_a_stacked_query_is_rewritten_on_every_line():
+    """``all_of`` / ``any_of``: every line under the per-line rules — ids
+    remapped, unknown ones dropped, a negated hop whose picks all vanished
+    removed (on the second line) — and no line ever removed."""
+    query = {
+        "any_of": [
+            {
+                "all_of": [
+                    {"type": "Application", "where": {"cards": [OLD_A], "tags": [OLD_TAG]}},
+                    {
+                        "type": "Application",
+                        "related": [
+                            {
+                                "relation": "relAppToITC",
+                                "type": "ITComponent",
+                                "where": {"cards": [OLD_C]},
+                                "negate": True,
+                            },
+                            {
+                                "relation": "relAppToITC",
+                                "type": "ITComponent",
+                                "where": {"subtype": ["saas"]},
+                            },
+                        ],
+                    },
+                ]
+            },
+            {
+                "type": "Organization",
+                "related": [
+                    {
+                        "relation": "relOrgToApp",
+                        "type": "Application",
+                        "where": {"cards": [OLD_B, OLD_C], "tags": [UNKNOWN_TAG]},
+                    }
+                ],
+            },
+            {"type": "Initiative", "where": {"cards": [OLD_C], "include_descendants": True}},
+        ]
+    }
+    kw = {"name": "x", "query": query}
+    tally = rm.rewrite_bookmark_row(kw, _ctx())
+    # OLD_A, OLD_TAG, OLD_B remapped; OLD_C three times and UNKNOWN_TAG unresolved.
+    assert tally.counts == {rm.REMAPPED: 3, rm.UNRESOLVED: 4}
+    assert kw == {
+        "name": "x",
+        "query": {
+            "any_of": [
+                {
+                    "all_of": [
+                        {"type": "Application", "where": {"cards": [NEW_A], "tags": [NEW_TAG]}},
+                        {
+                            "type": "Application",
+                            "related": [
+                                {
+                                    "relation": "relAppToITC",
+                                    "type": "ITComponent",
+                                    "where": {"subtype": ["saas"]},
+                                }
+                            ],
+                        },
+                    ]
+                },
+                {
+                    "type": "Organization",
+                    "related": [
+                        {
+                            "relation": "relOrgToApp",
+                            "type": "Application",
+                            "where": {"cards": [NEW_B]},
+                        }
+                    ],
+                },
+                {"type": "Initiative"},
+            ]
+        },
+    }
+    assert query["any_of"][0]["all_of"][0]["where"]["cards"] == [OLD_A]
+
+
+def test_a_top_level_all_of_is_rewritten_line_by_line():
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "all_of": [
+                {"type": "A", "where": {"cards": [OLD_B]}},
+                {
+                    "type": "A",
+                    "related": [
+                        {"relation": "r", "type": "B", "where": {"cards": [OLD_C]}, "negate": True}
+                    ],
+                },
+            ]
+        },
+        _ids(),
+        tally,
+    )
+    # The negated hop goes with its only pick; its line stays, hop-less.
+    assert out == {"all_of": [{"type": "A", "where": {"cards": [NEW_B]}}, {"type": "A"}]}
+    assert tally.counts == {rm.REMAPPED: 1, rm.UNRESOLVED: 1}
+
+
+def test_a_malformed_stack_is_untouched():
+    for value in (
+        {"all_of": "junk"},
+        {"any_of": ["junk", None]},
+        {"any_of": [{"all_of": "junk"}, {"type": "A"}]},
+    ):
+        tally = rm.RewriteTally()
+        assert rm.rewrite_card_query_ids(value, _ids(), tally) == value
+        assert tally.counts == {}
+
+
+def test_an_or_group_whose_start_picks_all_vanish_lists_its_whole_type():
+    """Deliberate: the line keeps its place without the condition, so the
+    ``any_of`` widens by every card of that type; the tally says why."""
+    tally = rm.RewriteTally()
+    out = rm.rewrite_card_query_ids(
+        {
+            "any_of": [
+                {"type": "Application", "where": {"cards": [OLD_A]}},
+                {
+                    "type": "Organization",
+                    "where": {"cards": [OLD_C], "include_descendants": True},
+                    "related": [{"relation": "relOrgToApp", "type": "Application"}],
+                },
+            ]
+        },
+        _ids(),
+        tally,
+    )
+    assert out == {
+        "any_of": [
+            {"type": "Application", "where": {"cards": [NEW_A]}},
+            {
+                "type": "Organization",
+                "related": [{"relation": "relOrgToApp", "type": "Application"}],
+            },
+        ]
+    }
+    assert tally.counts == {rm.REMAPPED: 1, rm.UNRESOLVED: 1}
+
+
+# ── matched columns (``via:<line>:<hop path>``) ─────────────────────────────
+
+_VIA_COLUMNS = ["core_name", "via:0:1", "rel_Application", "via:1:0.0", 7]
+
+
+def _negated_pick_view(pick: str) -> dict:
+    """A view whose first hop is negated on ``pick``; ``via:0:1`` names the
+    positive hop after it."""
+    return {
+        "name": "v",
+        "columns": list(_VIA_COLUMNS),
+        "query": {
+            "any_of": [
+                {
+                    "type": "Organization",
+                    "related": [
+                        {
+                            "relation": "relOrgToApp",
+                            "type": "Application",
+                            "negate": True,
+                            "where": {"cards": [pick]},
+                        },
+                        {"relation": "relOrgToInit", "type": "Initiative"},
+                    ],
+                },
+                {
+                    "type": "Application",
+                    "related": [
+                        {
+                            "relation": "relAppToITC",
+                            "type": "ITComponent",
+                            "related": [{"relation": "relItcToItc__out", "type": "ITComponent"}],
+                        }
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def test_a_dropped_hop_drops_the_views_matched_columns():
+    """Removing the negated hop shifts ``via:0:1`` onto index 0: every
+    matched column goes, the others stay in order."""
+    kw = _negated_pick_view(OLD_C)
+    rm.rewrite_bookmark_row(kw, _ctx())
+    assert [h["relation"] for h in kw["query"]["any_of"][0]["related"]] == ["relOrgToInit"]
+    assert kw["columns"] == ["core_name", "rel_Application", 7]
+
+
+def test_matched_columns_stay_when_no_hop_is_dropped():
+    kw = _negated_pick_view(OLD_A)
+    rm.rewrite_bookmark_row(kw, _ctx())
+    assert kw["query"]["any_of"][0]["related"][0]["where"] == {"cards": [NEW_A]}
+    assert kw["columns"] == _VIA_COLUMNS
+
+
+def test_a_dropped_hop_on_a_view_without_columns_adds_none():
+    kw = _negated_pick_view(OLD_C)
+    del kw["columns"]
+    rm.rewrite_bookmark_row(kw, _ctx())
+    assert "columns" not in kw
+
+
+@pytest.mark.parametrize(
+    ("query", "count"),
+    [
+        (None, 0),
+        ("x", 0),
+        ({"type": "A"}, 0),
+        ({"type": "A", "related": [{"type": "B"}, {"type": "C", "related": [{}]}]}, 3),
+        ({"all_of": [{"related": [{}]}, {"related": [{}, {}]}]}, 3),
+        ({"any_of": [{"all_of": [{"related": [{}]}]}, {"related": [{"related": [{}]}]}]}, 3),
+        ({"type": "A", "related": "x"}, 0),
+    ],
+)
+def test_query_hop_count(query, count):
+    assert rm.query_hop_count(query) == count
+
+
+def test_without_via_columns_leaves_anything_but_a_list():
+    assert rm.without_via_columns(None) is None
+    assert rm.without_via_columns({"via:0:0": 1}) == {"via:0:0": 1}
+    assert rm.without_via_columns(["via:0:0", "VIA:0:0", "x via:0:0"]) == ["VIA:0:0", "x via:0:0"]

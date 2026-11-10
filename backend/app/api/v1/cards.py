@@ -48,6 +48,8 @@ from app.schemas.card import (
     CardDeleteRequest,
     CardDeleteResponse,
     CardListResponse,
+    CardQueryMatchesRequest,
+    CardQueryMatchesResponse,
     CardRefCandidate,
     CardRefResolveRequest,
     CardRefResolveResponse,
@@ -84,6 +86,12 @@ from app.services.calculation_engine import run_calculations_for_card
 from app.services.card_completeness import missing_mandatory
 from app.services.card_flags import orphaned_condition, stale_condition
 from app.services.card_logo_service import logo_updated_map
+from app.services.card_query import (
+    CardQueryError,
+    parse_card_query,
+    prepare_card_query,
+)
+from app.services.card_query_matches import card_query_matches, match_nodes
 from app.services.card_read_scope import (
     CardReadScope,
     require_card_readable,
@@ -318,6 +326,33 @@ async def list_cards(
             "call), `ext` (an extension) or `system` (a background job)."
         ),
     ),
+    query: str | None = Query(
+        None,
+        description=(
+            "A multi-hop card query as JSON (metamodel keys, plus tag ids): "
+            '`{"type": <card type>, "where"?: {...}, "related"?: [{"relation": '
+            '<relation type, `__out` / `__in` on a self-referencing one>, "type": '
+            '<card type>, "where"?: {...}, "negate"?: bool, "related"?: [...]}]}`, '
+            "where `where` takes `lifecycle_phase`, `subtype`, `approval_status`, "
+            "`data_quality_band`, `eol_status` (`eol`, `approaching`, `supported`, "
+            "`unknown`, `__empty__` for no EOL data; computed from endoflife.date or a "
+            "custom EOL product, on a card type that tracks End of Life, and needs "
+            "`eol.view`: 403 `eol_view_required` otherwise), `attributes` value lists, "
+            "`tags` (tag ids: any tag of a group, every group named) and `cards` (card "
+            "ids). Keeps the cards of the start type with a "
+            "related card matching every hop (`negate`: with none); a related card "
+            "must be ACTIVE and readable by the caller. Queries stack: "
+            '`{"all_of": [<query>, …]}` keeps the cards matching every query (AND; '
+            'two or more, one start type), `{"any_of": [<query or all_of>, …]}` the '
+            "cards matching any group (OR; two or more, the groups may start from "
+            "different card types, so the list can hold several types). At most 6 "
+            "queries in a stack, 3 hops deep, 12 hops in all, 8000 characters. "
+            "400 with a code (`query_too_long`, `invalid_query_json`, `invalid_query`, "
+            "`all_of_needs_two`, `all_of_type_mismatch`, `any_of_needs_two`, "
+            "`too_many_lines`, `unknown_card_type`, `unknown_relation_type`, …) when it "
+            "cannot be answered."
+        ),
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(10000, ge=1, le=10000),
     sort_by: str | None = Query(
@@ -417,6 +452,18 @@ async def list_cards(
     if created_via:
         q = q.where(Card.created_via == created_via)
         count_q = count_q.where(Card.created_via == created_via)
+    if query:
+        try:
+            prepared = await prepare_card_query(db, user, parse_card_query(query))
+            if prepared.needs_release:
+                # An EOL condition fetches cycles from endoflife.date: hand the
+                # connection back first (get_db would pin it for the round-trip).
+                await db.commit()
+            clauses = await prepared.compile(read_scope)
+        except CardQueryError as exc:
+            raise HTTPException(exc.status, exc.code) from exc
+        q = q.where(*clauses)
+        count_q = count_q.where(*clauses)
 
     # Sorting — H9: whitelist sort columns
     effective_sort = sort_by if sort_by in _ALLOWED_SORT_COLUMNS else "name"
@@ -570,6 +617,7 @@ async def list_my_stakeholder_cards(
                     "key": role_key,
                     "label": srd.label if srd else role_key,
                     "color": srd.color if srd else "#757575",
+                    "description": srd.description if srd else None,
                     "translations": srd.translations if srd else {},
                 }
             )
@@ -1081,6 +1129,38 @@ async def resolve_card_refs(
             )
         )
     return CardRefResolveResponse(results=results)
+
+
+@router.post("/query/matches", response_model=CardQueryMatchesResponse)
+async def card_query_matches_route(
+    body: CardQueryMatchesRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """The cards behind a match: for the rows `ids` that `query` lists, the
+    cards at each requested step (`nodes`) through which the row matches —
+    under the list's own rules (ACTIVE, readable related cards; sibling and
+    negated hops kept). Per row and node, distinct cards by name then id, the
+    first 100, `more` when a further one exists. Only non-empty cells; a
+    card the caller may not read never appears. Same permission as
+    `GET /cards`; a bad query answers the list's 400 / 403 codes, a bad node
+    key 400 `unknown_node`. A read, sent as POST for its body (like
+    `resolve-refs`)."""
+    read_scope = await require_inventory_browse(db, user)
+    try:
+        prepared = await prepare_card_query(db, user, parse_card_query(body.query))
+        targets = match_nodes(prepared.groups, body.nodes)
+        if prepared.needs_release:
+            # An EOL condition fetches cycles from endoflife.date: hand the
+            # connection back first (get_db would pin it for the round-trip).
+            await db.commit()
+        pair_statuses = await prepared.pair_statuses()
+    except CardQueryError as exc:
+        raise HTTPException(exc.status, exc.code) from exc
+    rows = await card_query_matches(
+        db, targets, list(dict.fromkeys(body.ids)), read_scope, pair_statuses=pair_statuses
+    )
+    return CardQueryMatchesResponse(rows=rows)
 
 
 @router.get("/counts", response_model=CardCountsResponse)

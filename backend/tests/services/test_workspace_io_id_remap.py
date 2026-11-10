@@ -296,7 +296,39 @@ async def _seed_every_blob(db, user):
                     }
                 },
             ),
-            Bookmark(user_id=user.id, name="Cloud apps", filters={"tagIds": [str(tag.id)]}),
+            Bookmark(
+                user_id=user.id,
+                name="Cloud apps",
+                filters={"tagIds": [str(tag.id)]},
+                # A stacked multi-hop query naming the tag and a picked card
+                # at the start card and at a hop of the first line, and a pick
+                # on the start card of the second group's line.
+                query={
+                    "any_of": [
+                        {
+                            "type": "Application",
+                            "where": {
+                                "tags": [str(tag.id)],
+                                "cards": [str(crm.id)],
+                                "include_descendants": True,
+                            },
+                            "related": [
+                                {
+                                    "relation": "relAppToOrg",
+                                    "type": "Organization",
+                                    "where": {"tags": [str(tag.id)], "cards": [str(org.id)]},
+                                }
+                            ],
+                        },
+                        {
+                            "all_of": [
+                                {"type": "Organization", "where": {"cards": [str(org.id)]}},
+                                {"type": "Organization", "where": {"tags": [str(tag.id)]}},
+                            ]
+                        },
+                    ]
+                },
+            ),
             Todo(description="Review", card_id=crm.id, link=f"/cards/{crm.id}"),
             TurboLensComplianceFinding(
                 run_id=run.id,
@@ -365,6 +397,34 @@ async def test_no_source_id_survives_a_cross_instance_import(db):
     version = (await db.execute(select(ProcessFlowVersion))).scalar_one()
     assert version.draft_element_links["t1"]["application_id"] == str(new_crm.id)
     assert version.draft_element_links["t1"]["data_object_id"] is None
+    new_tag = (await db.execute(select(Tag).where(Tag.name == "Cloud"))).scalar_one()
+    bookmark = (await db.execute(select(Bookmark))).scalar_one()
+    new_org = await _by_name(db, "Sales", "Organization")
+    assert bookmark.query == {
+        "any_of": [
+            {
+                "type": "Application",
+                "where": {
+                    "tags": [str(new_tag.id)],
+                    "cards": [str(new_crm.id)],
+                    "include_descendants": True,
+                },
+                "related": [
+                    {
+                        "relation": "relAppToOrg",
+                        "type": "Organization",
+                        "where": {"tags": [str(new_tag.id)], "cards": [str(new_org.id)]},
+                    }
+                ],
+            },
+            {
+                "all_of": [
+                    {"type": "Organization", "where": {"cards": [str(new_org.id)]}},
+                    {"type": "Organization", "where": {"tags": [str(new_tag.id)]}},
+                ]
+            },
+        ]
+    }
 
 
 async def test_a_selective_run_over_module_sheets_still_translates(db):

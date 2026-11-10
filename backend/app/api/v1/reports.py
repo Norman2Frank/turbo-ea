@@ -28,8 +28,8 @@ from app.models.user import User
 from app.models.user_favorite import UserFavorite
 from app.services.card_flags import (
     EOL_BUCKETS,
-    EOL_TYPES,
     eol_bucket_condition,
+    eol_type_keys,
     has_eol_coverage,
     has_eol_link,
     has_manual_eol,
@@ -44,8 +44,20 @@ from app.services.card_read_scope import (
     event_read_filters,
     scrub_event_payloads,
 )
+from app.services.cost_attribution import (
+    SPLIT,
+    attribute_related_costs,
+    distinct_total,
+    group_costs,
+    link_counts,
+    parse_attribution,
+    primary_group,
+    split_share,
+)
 from app.services.cost_field_filter import cost_field_keys_from_card_schema
 from app.services.cost_value import cost_value
+from app.services.data_quality_bands import DQ_BAND_BOUNDS, band_of, dq_band_condition
+from app.services.eol_custom_service import is_custom_product, load_custom_cycles
 from app.services.eol_service import (
     eol_status,
     fetch_cycles_for_products,
@@ -762,6 +774,7 @@ async def stakeholder_directory(
                 "role_label": role_key,
                 "role_color": "#757575",
                 "role_translations": {},
+                "role_description": None,
                 "users": {},
             },
         )
@@ -802,6 +815,7 @@ async def stakeholder_directory(
                 role_node["role_label"] = srd.label
                 role_node["role_color"] = srd.color or "#757575"
                 role_node["role_translations"] = srd.translations or {}
+                role_node["role_description"] = srd.description
             # Convert users dict → list, ordered by card_count desc, then name.
             users_list = list(role_node["users"].values())
             users_list.sort(key=lambda u: (-u["card_count"], (u["display_name"] or "").lower()))
@@ -1410,6 +1424,7 @@ async def cost_treemap(
     group_by: str | None = Query(None),
     aggregate: list[str] | None = Query(None),
     parent_card_id: uuid.UUID | None = Query(None),
+    attribution: str = Query("full"),
 ):
     """Cost treemap: items with cost, optionally grouped by a related type.
 
@@ -1438,6 +1453,28 @@ async def cost_treemap(
     that have at least one relation (in either direction) to that parent. This
     powers the treemap drill-down — clicking a parent rectangle re-queries with
     the related type as ``type`` and the parent's id as ``parent_card_id``.
+
+    ``attribution`` (``"full"``, the default, or ``"split"``) decides what a
+    related card shared by several cards contributes to each (discussion #1362;
+    the arithmetic is ``app.services.cost_attribution``):
+
+    * In ``aggregate`` mode each item lists the related cards it sums
+      (``source_ids``) and the response maps every one of them to its full cost
+      (``source_costs``). ``full`` puts a related card's whole cost on every
+      card it links to, and ``total`` counts each related card once, so it is
+      no longer the sum of the tiles when one is shared. ``split`` divides the
+      cost equally between the readable, active, live cards of ``type`` it
+      links to — counted before the ``parent_card_id`` restriction, so a drill
+      never changes a share, and never counting a card the reader cannot see —
+      and ``total`` is the sum of the items.
+    * Without ``aggregate`` but with ``parent_card_id``, ``split`` divides each
+      item's own cost by the number of readable live cards of the parent's
+      type it links to, so the drilled panel adds up to the parent's tile.
+      Without either, ``attribution`` changes nothing.
+    * With ``group_by``, each item lists every group it links to (``groups``,
+      sorted) and is filed under the alphabetically first (``group``); a group's
+      ``cost`` counts an item in full in each of its groups (``full``) or
+      shares it equally between them (``split``).
     """
     # See `cost_report` above: `costs.view` alone gates a report that is
     # nothing but costs.
@@ -1445,6 +1482,10 @@ async def cost_treemap(
     # M-3: Validate cost_field format
     if not _SAFE_KEY_RE.match(cost_field):
         raise HTTPException(400, f"Invalid cost_field: {cost_field!r}")
+    try:
+        attribution = parse_attribution(attribution)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     fy_start = await get_fiscal_year_start(db)
     fy = current_fiscal_year(fy_start)
     read_scope = await CardReadScope.load(db, user)
@@ -1456,15 +1497,25 @@ async def cost_treemap(
     sheets = [
         c for c in result.scalars().all() if is_live_in_fiscal_year(c.lifecycle, fy, fy_start)
     ]
+    # The unrestricted live set: a split share is counted over every card of
+    # ``type`` a related card links to, before the drill restriction below.
+    all_sheets = sheets
 
+    parent: Card | None = None
     if parent_card_id is not None:
         # Restrict sheets to those linked (in either direction) to the parent card.
         # A parent hidden from the reader has no linked cards as far as they know.
-        sheet_ids = [c.id for c in sheets]
-        if parent_card_id not in await read_scope.readable_card_ids(
-            db, {parent_card_id}, mode="module"
-        ):
-            sheet_ids = []
+        # The parent only has to be readable, not ACTIVE: a saved drill into a
+        # card archived since still lists the cards it is related to.
+        parent = (
+            await db.execute(
+                select(Card).where(
+                    Card.id == parent_card_id,
+                    *read_scope.where(Card, mode="module"),
+                )
+            )
+        ).scalar_one_or_none()
+        sheet_ids = [c.id for c in sheets] if parent is not None else []
         if sheet_ids:
             edges_result = await db.execute(
                 select(Relation).where(
@@ -1519,9 +1570,14 @@ async def cost_treemap(
                     f"{field_key!r} is not a cost field on {type_key!r}",
                 )
 
-        primary_ids = [card.id for card in sheets]
-        primary_id_set = {str(card.id) for card in sheets}
-        cost_by_primary: dict[str, float] = {}
+        # Every live card of ``type``, not just the drilled ones, so a related
+        # card's split denominator does not depend on the drill.
+        primary_ids = [card.id for card in all_sheets]
+        primary_id_set = {str(card.id) for card in all_sheets}
+        # Request-wide: primary id -> related ids it sums, and related id -> its
+        # cost summed over the selected fields of its type (one card, one source).
+        sources_by_primary: dict[str, set[str]] = {}
+        source_cost: dict[str, float] = {}
 
         for type_key, field_key in pairs:
             # Hidden related cards are never summed into a visible card's total.
@@ -1570,28 +1626,53 @@ async def cost_treemap(
                 elif tid in primary_id_set and sid in related_id_set:
                     per_primary.setdefault(tid, set()).add(sid)
 
+            linked_here: set[str] = set()
             for primary_id, linked in per_primary.items():
-                cost_by_primary[primary_id] = cost_by_primary.get(primary_id, 0.0) + sum(
-                    related_cost_by_id.get(rid, 0) for rid in linked
-                )
+                sources_by_primary.setdefault(primary_id, set()).update(linked)
+                linked_here |= linked
+            for rid in linked_here:
+                source_cost[rid] = source_cost.get(rid, 0.0) + related_cost_by_id.get(rid, 0)
 
+        cost_by_primary = attribute_related_costs(
+            sources_by_primary, source_cost, link_counts(sources_by_primary), attribution
+        )
+
+        emitted_sources: dict[str, set[str]] = {}
         for card in sheets:
-            cost = cost_by_primary.get(str(card.id), 0.0)
+            cid = str(card.id)
+            cost = cost_by_primary.get(cid, 0.0)
             if not cost:
                 continue
+            emitted_sources[cid] = sources_by_primary[cid]
             items.append(
                 {
-                    "id": str(card.id),
+                    "id": cid,
                     "name": card.name,
                     "cost": cost,
                     "lifecycle": card.lifecycle,
                     "attributes": card.attributes,
+                    "source_ids": sorted(sources_by_primary[cid]),
                 }
             )
             total += cost
+        if attribution != SPLIT:
+            # The tiles overlap where a related card is shared: count it once.
+            total = distinct_total(emitted_sources, source_cost)
+        source_costs = {
+            rid: source_cost[rid] for linked in emitted_sources.values() for rid in linked
+        }
     else:
+        # Drill-down with split: each item's own cost is shared between the
+        # readable live cards of the parent's type it links to.
+        parent_links: dict[str, int] = {}
+        if parent is not None and attribution == SPLIT and sheets:
+            parent_links = await _parent_type_link_counts(
+                db, read_scope, parent.type, [c.id for c in sheets], fy, fy_start
+            )
         for card in sheets:
             cost = cost_value((card.attributes or {}).get(cost_field))
+            if parent is not None and attribution == SPLIT:
+                cost = split_share(cost, parent_links.get(str(card.id), 0))
             if not cost:
                 continue
             items.append(
@@ -1630,34 +1711,87 @@ async def cost_treemap(
         )
         rels = rels_result.scalars().all()
 
-        # Build item -> group name mapping
-        item_group: dict[str, str] = {}
+        # Item -> every group it links to. An item linked to two group cards
+        # belongs to both; it is filed under the alphabetically first so the
+        # single ``group`` no longer depends on which relation row came last.
+        item_groups: dict[str, set[str]] = {}
         for r in rels:
             sid, tid = str(r.source_id), str(r.target_id)
             if tid in grp_map:
-                item_group[sid] = grp_map[tid]
+                item_groups.setdefault(sid, set()).add(grp_map[tid])
             elif sid in grp_map:
-                item_group[tid] = grp_map[sid]
+                item_groups.setdefault(tid, set()).add(grp_map[sid])
 
         for item in items:
-            item["group"] = item_group.get(item["id"], "Ungrouped")
+            names = sorted(item_groups.get(item["id"], ()))
+            item["groups"] = names
+            item["group"] = primary_group(names)
 
-        # Build group summaries
-        groups_dict: dict[str, float] = {}
-        for item in items:
-            g = item["group"]
-            groups_dict[g] = groups_dict.get(g, 0) + item["cost"]
+        groups_dict = group_costs(items, attribution)
         groups = [
             {"name": k, "cost": v} for k, v in sorted(groups_dict.items(), key=lambda x: -x[1])
         ]
 
-    return {
+    payload: dict = {
         "items": items,
         "total": total,
         "groups": groups,
         "fiscal_year": fy,
         "fiscal_year_start": fy_start,
+        "attribution": attribution,
     }
+    if aggregate:
+        payload["source_costs"] = source_costs
+    return payload
+
+
+async def _parent_type_link_counts(
+    db: AsyncSession,
+    read_scope: CardReadScope,
+    parent_type: str,
+    sheet_ids: list[uuid.UUID],
+    fy: int,
+    fy_start: int,
+) -> dict[str, int]:
+    """Sheet id -> number of readable, active, live cards of ``parent_type``
+    linked to it in either direction, each card counted once whatever the
+    number of relation types between them."""
+    parents_result = await db.execute(
+        select(Card.id, Card.lifecycle).where(
+            Card.type == parent_type,
+            Card.status == "ACTIVE",
+            *read_scope.where(Card, mode="module"),
+        )
+    )
+    parent_ids = [
+        card_id
+        for card_id, lifecycle in parents_result.all()
+        if is_live_in_fiscal_year(lifecycle, fy, fy_start)
+    ]
+    if not parent_ids:
+        return {}
+    parent_id_set = {str(pid) for pid in parent_ids}
+    sheet_id_set = {str(sid) for sid in sheet_ids}
+    rels = (
+        (
+            await db.execute(
+                select(Relation).where(
+                    ((Relation.source_id.in_(parent_ids)) & (Relation.target_id.in_(sheet_ids)))
+                    | ((Relation.source_id.in_(sheet_ids)) & (Relation.target_id.in_(parent_ids)))
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    linked: dict[str, set[str]] = {}
+    for r in rels:
+        sid, tid = str(r.source_id), str(r.target_id)
+        if sid in parent_id_set and tid in sheet_id_set:
+            linked.setdefault(tid, set()).add(sid)
+        if tid in parent_id_set and sid in sheet_id_set:
+            linked.setdefault(sid, set()).add(tid)
+    return {sheet_id: len(parents) for sheet_id, parents in linked.items()}
 
 
 @router.get("/capability-heatmap")
@@ -1665,12 +1799,25 @@ async def capability_heatmap(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
     metric: str = Query("app_count"),
+    attribution: str = Query("full"),
 ):
-    """Business capability heatmap data with hierarchy."""
+    """Business capability heatmap data with hierarchy.
+
+    ``total_cost`` per capability sums its applications' cost fields. With
+    ``attribution="full"`` (the default) an application linked to several
+    capabilities counts in full on each; with ``"split"`` its cost is divided
+    equally between the readable capabilities it links to. Each application
+    lists those capabilities (``capability_ids``) so the page can roll a branch
+    up without counting a shared application twice.
+    """
     await PermissionService.require_permission(db, user, "reports.ea_dashboard")
     # M-3: Whitelist valid metric values
     if metric not in {"app_count", "total_cost", "risk_count"}:
         raise HTTPException(400, f"Invalid metric: {metric!r}")
+    try:
+        attribution = parse_attribution(attribution)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if metric == "total_cost":
         await PermissionService.require_permission(db, user, "costs.view")
     can_view_costs_global = await PermissionService.has_app_permission(db, user, "costs.view")
@@ -1756,12 +1903,16 @@ async def capability_heatmap(
     # two cards may be connected by several relation types. Track what has been
     # added so a capability never lists the same application twice.
     cap_app_seen: dict[str, set[str]] = {cid: set() for cid in cap_apps}
+    # App -> the readable capabilities it is linked to, derived from `cap_apps`
+    # links only (both ends already read-scoped), never from raw relation rows.
+    app_caps: dict[str, set[str]] = {}
 
     def _link_cap_app(cap_id: str, app_id: str) -> None:
         if app_id in cap_app_seen[cap_id]:
             return
         cap_app_seen[cap_id].add(app_id)
         cap_apps[cap_id].append(app_map[app_id])
+        app_caps.setdefault(app_id, set()).add(cap_id)
 
     for r in rels:
         sid, tid = str(r.source_id), str(r.target_id)
@@ -1830,6 +1981,7 @@ async def capability_heatmap(
                 k: sorted(set(v)) for k, v in app_related_by_rel.get(aid, {}).items()
             },
             "tag_ids": cap_app_tag_ids.get(aid, []),
+            "capability_ids": sorted(app_caps.get(aid, ())),
         }
 
     # Collect relation filter options grouped by type (visible types only)
@@ -1858,8 +2010,10 @@ async def capability_heatmap(
         if can_view_costs_global:
             for a in linked_apps:
                 attrs = a.attributes or {}
-                for ck in cost_field_keys:
-                    total_cost += cost_value(attrs.get(ck))
+                app_cost = sum(cost_value(attrs.get(ck)) for ck in cost_field_keys)
+                if attribution == SPLIT:
+                    app_cost = split_share(app_cost, len(app_caps[str(a.id)]))
+                total_cost += app_cost
 
         risk_count = sum(1 for a in linked_apps if (a.lifecycle or {}).get("endOfLife"))
 
@@ -1879,6 +2033,7 @@ async def capability_heatmap(
     payload = {
         "items": items,
         "metric": metric,
+        "attribution": attribution,
         "filterable_types": filterable_types,
         # Relation types reaching each filterable card type, so the report can
         # offer a facet per relationship when several share a card-type pair.
@@ -2101,12 +2256,7 @@ async def data_quality(db: AsyncSession = Depends(get_db), user: User = Depends(
         ts["total"] += 1
         ts["sum_data_quality"] += card.data_quality or 0
         all_data_quality_scores.append(card.data_quality or 0)
-        if card.data_quality >= 80:
-            ts["complete"] += 1
-        elif card.data_quality >= 40:
-            ts["partial"] += 1
-        else:
-            ts["minimal"] += 1
+        ts[band_of(card.data_quality)] += 1
 
     # Overall completion
     overall = (
@@ -2130,15 +2280,17 @@ async def data_quality(db: AsyncSession = Depends(get_db), user: User = Depends(
     cutoff = stale_cutoff()
     stale = sum(1 for card in sheets if card.updated_at and card.updated_at < cutoff)
 
-    # EOL coverage, per card type. Only Applications and IT Components can
-    # carry an end of life, so this counts that population rather than every
-    # card — a share of the whole inventory would read as a rounding error.
+    # EOL coverage, per card type. Only the types that track End of Life (the
+    # type's own End of Life section toggle — Applications and IT Components
+    # unless an admin says otherwise) can carry one, so this counts that
+    # population rather than every card — a share of the whole inventory
+    # would read as a rounding error.
     # Split by where the information came from, because the two are not
     # interchangeable: a vendor link keeps itself current, a hand-entered date
     # is only as good as the last person to review it. Same predicates as the
     # EOL report (`card_flags`), so the chart and the report agree.
     eol_coverage = []
-    for type_key in EOL_TYPES:
+    for type_key in await eol_type_keys(db):
         of_type = [card for card in sheets if card.type == type_key]
         if not of_type:
             continue
@@ -2205,17 +2357,6 @@ async def data_quality(db: AsyncSession = Depends(get_db), user: User = Depends(
     }
 
 
-# Band boundaries MUST stay in lock-step with the counting in `data_quality`
-# above (>=80 complete, >=40 partial, else minimal) and with DATA_QUALITY_BANDS
-# in the frontend — the panel opened from a bar segment has to list exactly the
-# cards that segment counted.
-_DQ_BAND_BOUNDS: dict[str, tuple[float | None, float | None]] = {
-    "complete": (80.0, None),
-    "partial": (40.0, 80.0),
-    "minimal": (None, 40.0),
-}
-
-
 @router.get("/data-quality/cards")
 async def data_quality_cards(
     type: str | None = Query(default=None, description="Card type key"),
@@ -2240,7 +2381,7 @@ async def data_quality_cards(
     """
     await PermissionService.require_permission(db, user, "reports.ea_dashboard")
 
-    if band is not None and band not in _DQ_BAND_BOUNDS:
+    if band is not None and band not in DQ_BAND_BOUNDS:
         raise HTTPException(status_code=400, detail=f"Unknown band: {band}")
     eol_scopes = {f"eol_{bucket}": bucket for bucket in EOL_BUCKETS}
     if scope is not None and scope not in ("orphaned", "stale", *eol_scopes):
@@ -2251,17 +2392,15 @@ async def data_quality_cards(
     if type:
         conditions.append(Card.type == type)
     if band:
-        low, high = _DQ_BAND_BOUNDS[band]
-        if low is not None:
-            conditions.append(Card.data_quality >= low)
-        if high is not None:
-            conditions.append(Card.data_quality < high)
+        conditions.append(dq_band_condition([band]))
     if scope == "stale":
         conditions.append(stale_condition())
     elif scope == "orphaned":
         conditions.append(orphaned_condition())
     elif scope in eol_scopes:
-        conditions.append(eol_bucket_condition(eol_scopes[scope]))
+        conditions.append(
+            eol_bucket_condition(eol_scopes[scope], eol_types=await eol_type_keys(db))
+        )
 
     total_result = await db.execute(select(func.count()).select_from(Card).where(*conditions))
     total = total_result.scalar_one()
@@ -2307,13 +2446,15 @@ async def eol_report(
 ):
     """End-of-Life risk & impact report.
 
-    Returns all Applications and IT Components with linked EOL data
+    Returns every card of a type that tracks End of Life (Applications and IT
+    Components by default; see ``card_flags.type_tracks_eol``) with linked EOL data
     (from endoflife.date API) *or* manually maintained lifecycle dates,
     enriched with live cycle information and impact mapping
     (IT Component → related Applications).
 
     Each item includes a ``source`` field: ``"api"`` for items linked
-    to endoflife.date, ``"manual"`` for items with only a hand-entered
+    to endoflife.date, ``"custom"`` for items linked to one of the
+    organisation's own custom EOL products, ``"manual"`` for items with only a hand-entered
     ``endOfLife`` lifecycle date, and ``"none"`` for cards carrying neither.
 
     Those last ones (``status: "missing"``) are the answer to "which of my
@@ -2324,11 +2465,13 @@ async def eol_report(
     """
     await PermissionService.require_permission(db, user, "reports.ea_dashboard")
     read_scope = await CardReadScope.load(db, user)
-    # 1. Fetch all active Applications and ITComponents the reader may see
+    # 1. Fetch every active card the reader may see of a type that tracks End
+    #    of Life (`card_flags.type_tracks_eol`)
+    eol_types = await eol_type_keys(db)
     result = await db.execute(
         select(Card).where(
             Card.status == "ACTIVE",
-            Card.type.in_(EOL_TYPES),
+            Card.type.in_(eol_types),
             *read_scope.where(Card, mode="module"),
         )
     )
@@ -2363,10 +2506,12 @@ async def eol_report(
             },
         }
 
-    # 2. Batch-fetch unique products from endoflife.date (for API-linked items)
-    product_cycles = await fetch_cycles_for_products(
-        {(card.attributes or {})["eol_product"] for card in api_sheets}
-    )
+    # 2. Batch-fetch unique products from endoflife.date (for API-linked
+    #    items). Links to a custom EOL product resolve from the database
+    #    instead and are never sent upstream.
+    linked_products = {(card.attributes or {})["eol_product"] for card in api_sheets}
+    custom_cycles = await load_custom_cycles(db, linked_products)
+    product_cycles = await fetch_cycles_for_products(linked_products)
 
     # 3. Get relations between ITComponent and Application for impact mapping.
     #    Uncovered components are included: "what would this hit if it went
@@ -2374,6 +2519,18 @@ async def eol_report(
     all_eol_sheets = api_sheets + manual_sheets + missing_sheets
     it_ids = [card.id for card in all_eol_sheets if card.type == "ITComponent"]
     app_map = {str(card.id): card for card in all_sheets if card.type == "Application"}
+    if it_ids and "Application" not in eol_types:
+        # Applications are the impact, whether or not they track End of Life
+        # themselves: an admin who turned EOL off for them still needs to see
+        # which of them a component going end of life would hit.
+        apps = await db.execute(
+            select(Card).where(
+                Card.status == "ACTIVE",
+                Card.type == "Application",
+                *read_scope.where(Card, mode="module"),
+            )
+        )
+        app_map = {str(card.id): card for card in apps.scalars().all()}
     it_to_apps: dict[str, list[dict]] = {}
 
     if it_ids:
@@ -2423,7 +2580,9 @@ async def eol_report(
         cycle_key = str(attrs["eol_cycle"])
 
         # Match cycle data
-        cycle_data = find_cycle(product_cycles.get(product, []), cycle_key)
+        is_custom = is_custom_product(product)
+        cycles = (custom_cycles if is_custom else product_cycles).get(product, [])
+        cycle_data = find_cycle(cycles, cycle_key)
 
         status = "unknown"
         if cycle_data:
@@ -2448,9 +2607,10 @@ async def eol_report(
                 "type": card.type,
                 "subtype": card.subtype,
                 "eol_product": product,
+                "eol_product_title": cycles[0].get("title") if is_custom and cycles else None,
                 "eol_cycle": cycle_key,
                 "status": status,
-                "source": "api",
+                "source": "custom" if is_custom else "api",
                 "cycle_data": cycle_data,
                 "lifecycle": card.lifecycle,
                 "affected_apps": affected_apps,

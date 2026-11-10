@@ -130,6 +130,8 @@ export interface StakeholderRoleDef {
   allowed_types: string[] | null;
   /** Absent on the JSONB fallback and the hardcoded default roles. */
   color?: string | null;
+  /** What the role means; translated under `translations.description`. */
+  description?: string | null;
   translations?: MetamodelTranslations;
 }
 
@@ -141,11 +143,18 @@ export interface StakeholderRoleDef {
 export interface StakeholderRoleOption {
   key: string;
   label: string;
+  description?: string | null;
   translations?: MetamodelTranslations;
 }
 
 /** Locale-keyed translations for a single property (e.g., label). */
 export type TranslationMap = Record<string, string>;
+
+/**
+ * Admin-written help per lifecycle phase: `{phase: {locale: text}}`
+ * (`/settings/lifecycle-phase-help`, carried by `/settings/bootstrap`).
+ */
+export type LifecyclePhaseHelp = Record<string, TranslationMap>;
 
 /** Top-level translations stored in the `translations` JSONB column. */
 export interface MetamodelTranslations {
@@ -485,6 +494,8 @@ export interface CalculationRunReport {
 
 export interface EAPrinciple {
   id: string;
+  /** Human-readable reference (`P-001`); what a spreadsheet re-import matches on first. */
+  reference_number?: string | null;
   title: string;
   description?: string;
   rationale?: string;
@@ -761,6 +772,112 @@ export interface Bookmark {
   shared_with?: BookmarkShareEntry[];
   odata_url?: string | null;
   created_at?: string;
+  /** A query view's stacked query (a plain query, an `all_of` group or an
+   *  `any_of` of groups), evaluated by the backend on every open. Written by
+   *  the inventory's query builder and through the MCP server; its presence
+   *  is what makes a view a query view. */
+  query?: CardQuerySet | null;
+  /** Channel the view was created / last changed through (`web`, `mcp`, …). */
+  created_via?: string | null;
+  updated_via?: string | null;
+}
+
+/** Per-node conditions of a `CardQuery` — metamodel keys, plus tag ids. */
+export interface CardQueryWhere {
+  /** Lifecycle phase keys (`plan` … `endOfLife`), or `none` for no lifecycle. */
+  lifecycle_phase?: string[];
+  subtype?: string[];
+  approval_status?: string[];
+  /** Data-quality bands (`complete` / `partial` / `minimal`, as `DATA_QUALITY_BANDS`). */
+  data_quality_band?: string[];
+  /** End-of-life statuses (`eol` / `approaching` / `supported` / `unknown`, as
+   *  `EOL_STATUSES`), or `"__empty__"` for no EOL data recorded. Needs `eol.view`. */
+  eol_status?: string[];
+  /** Field key → option keys / `"true"` / `"false"` / text / `"__empty__"`. */
+  attributes?: Record<string, string[]>;
+  /** Tag ids: any tag of one tag group (OR), every group named (AND). */
+  tags?: string[];
+  /** Card ids of the node's own type (at most 50): the node is one of these. */
+  cards?: string[];
+  /** A picked card also covers its descendants (`parent_id`); needs `cards`. */
+  include_descendants?: boolean;
+}
+
+/** One hop of a `CardQuery`: an EXISTS (or, with `negate`, NOT EXISTS) over a
+ *  relation type to cards of `type` that satisfy `where`. `relation` is a
+ *  relation type key, or `<key>__out` / `<key>__in` on a self-referencing type. */
+export interface CardQueryHop {
+  relation: string;
+  type: string;
+  where?: CardQueryWhere;
+  negate?: boolean;
+  related?: CardQueryHop[];
+}
+
+/** A server-evaluated multi-hop inventory condition (`GET /cards?query=`). */
+export interface CardQuery {
+  type: string;
+  where?: CardQueryWhere;
+  related?: CardQueryHop[];
+}
+
+/** Lines of one start type a card must ALL match (2+ lines). */
+export interface CardQueryAll {
+  all_of: CardQuery[];
+}
+
+/** Groups whose results are added (2+ groups); a group may be one line. */
+export interface CardQueryAny {
+  any_of: (CardQuery | CardQueryAll)[];
+}
+
+/**
+ * What a query view holds: one query, an AND group of lines of one start
+ * type, or an OR of such groups (possibly over several start types).
+ */
+export type CardQuerySet = CardQuery | CardQueryAll | CardQueryAny;
+
+/** A card named in a matched-cards cell. */
+export interface CardQueryMatchCard {
+  id: string;
+  name: string;
+}
+
+/** The cards at one step of a query that made one row match (at most 100). */
+export interface CardQueryMatchCell {
+  cards: CardQueryMatchCard[];
+  /** More cards matched than the 100 listed. */
+  more: boolean;
+}
+
+/** `POST /cards/query/matches`: the switched-on steps of the sent query, for the loaded rows. */
+export interface CardQueryMatchesRequest {
+  /** Exactly the query the card list was sent. */
+  query: CardQuerySet;
+  /** Node keys (`"<line>:<hop path>"`, see `matchNodes`), at most 12. */
+  nodes: string[];
+  /** Ids of the rows loaded in the grid, at most 10,000. */
+  ids: string[];
+}
+
+/** Row id → node key → its cell; only non-empty cells are present. */
+export interface CardQueryMatchesResponse {
+  rows: Record<string, Record<string, CardQueryMatchCell>>;
+}
+
+/** The query view currently applied in the inventory. */
+export interface ActiveQuery {
+  viewId: string;
+  name: string;
+  query: CardQuerySet;
+  createdVia?: string | null;
+}
+
+/** A query view being built or edited in the inventory's path strip. */
+export interface QueryDraft {
+  query: CardQuerySet;
+  /** The saved view being edited, or null for a new one. */
+  viewId: string | null;
 }
 
 export interface SavedReport {
@@ -845,7 +962,8 @@ export type WidgetType =
   | "system_activity"
   | "unassigned_todos"
   | "stakeholder_directory"
-  | "quality_leaderboard";
+  | "quality_leaderboard"
+  | "inventory_views";
 
 /** How the Data quality leaderboard ranks people. */
 export type LeaderboardRankBy = "average_quality" | "card_count";
@@ -1198,6 +1316,8 @@ export interface ArchitectureDecision {
   created_via?: string | null;
   updated_via?: string | null;
   updated_at: string | null;
+  /** `GET /adr?include_content=true` only: `related_decisions` as reference numbers. */
+  related_references?: string[];
 }
 
 export interface FileAttachment {
@@ -1464,7 +1584,11 @@ export interface BadgeCounts {
 // ---------------------------------------------------------------------------
 
 export interface EolProduct {
+  /** endoflife.date slug, or `custom:<key>` for a custom EOL product. */
   name: string;
+  /** Display name of a custom product (endoflife.date products carry none). */
+  title?: string | null;
+  custom?: boolean;
 }
 
 export interface EolCycle {
@@ -1478,6 +1602,8 @@ export interface EolCycle {
   discontinued?: string | boolean | null;
   codename?: string | null;
   link?: string | null;
+  /** A custom product's title; endoflife.date cycles carry none. */
+  title?: string | null;
 }
 
 /**
@@ -1487,8 +1613,11 @@ export interface EolCycle {
  */
 export interface EolCardStatus {
   status: "eol" | "approaching" | "supported" | "unknown";
-  source: "api" | "manual";
+  /** `custom` — linked to one of the organisation's custom EOL products. */
+  source: "api" | "custom" | "manual";
   eol_product?: string | null;
+  /** A custom product's title; null for endoflife.date links. */
+  eol_product_title?: string | null;
   eol_cycle?: string | null;
   /** ISO date, or null when upstream reports only a boolean. */
   eol_date?: string | null;
@@ -1503,6 +1632,8 @@ export interface EolCardStatusResponse {
 export interface EolProductMatch {
   name: string;
   score: number;
+  title?: string | null;
+  custom?: boolean;
 }
 
 export interface MassEolCandidate {
@@ -1511,6 +1642,66 @@ export interface MassEolCandidate {
   card_type: string;
   eol_product: string;
   score: number;
+  title?: string | null;
+  custom?: boolean;
+}
+
+/** An EOL / end-of-support value: a date, `true` (ended), `false` (no end announced). */
+export type EolMilestone = string | boolean | null;
+
+/** One release cycle of a custom EOL product (`GET /eol/custom-products`). */
+export interface EolCustomCycle {
+  id: string;
+  cycle: string;
+  releaseDate: string | null;
+  support: EolMilestone;
+  eol: EolMilestone;
+  latest: string | null;
+  latestReleaseDate: string | null;
+  sort_order: number;
+  /** Cards the caller can see that link this cycle. */
+  linked_cards: number;
+  updated_at: string | null;
+}
+
+/** endoflife.date's product categories (the file's `category` field). */
+export type EolDateCategory =
+  | "app"
+  | "database"
+  | "device"
+  | "framework"
+  | "lang"
+  | "os"
+  | "server-app"
+  | "service"
+  | "standard";
+
+/** A product the organisation tracks end-of-life dates for itself. */
+export interface EolCustomProduct {
+  id: string;
+  key: string;
+  /** What a card stores in `attributes.eol_product`: `custom:<key>`. */
+  product: string;
+  title: string;
+  description: string | null;
+  link: string | null;
+  /** What the endoflife.date proposal file needs beyond the cycles. */
+  eol_category: EolDateCategory | null;
+  release_policy_note: string | null;
+  linked_cards: number;
+  cycles: EolCustomCycle[];
+  updated_at: string | null;
+}
+
+/** The writable fields of a cycle, as sent on create / patch. */
+export interface EolCustomCycleInput {
+  cycle: string;
+  releaseDate?: string | null;
+  support?: EolMilestone;
+  /** Required on endoflife.date: a date, `false` (none announced) or `true`. */
+  eol: EolMilestone;
+  latest?: string | null;
+  latestReleaseDate?: string | null;
 }
 
 export interface MassEolResult {
@@ -1518,6 +1709,8 @@ export interface MassEolResult {
   card_name: string;
   card_type: string;
   current_eol_product?: string | null;
+  /** The current link's title when it is a custom product. */
+  current_title?: string | null;
   current_eol_cycle?: string | null;
   candidates: MassEolCandidate[];
 }
@@ -2611,6 +2804,56 @@ export interface RiskImportResponse {
   skipped: number;
   failed: number;
   dry_run: boolean;
+}
+
+/** One row's outcome in a spreadsheet import's dry run or apply
+ *  (`/metamodel/principles/bulk-import`, `/adr/bulk-import`). */
+export interface SpreadsheetImportRowResult {
+  row_index: number;
+  status: "created" | "updated" | "skipped" | "failed";
+  id: string | null;
+  reference_number: string | null;
+  /** Principles only: the columns an `updated` row changes. */
+  changed_fields?: string[];
+  error: string | null;
+  warnings: string[];
+}
+
+export interface SpreadsheetImportResponse {
+  results: SpreadsheetImportRowResult[];
+  created: number;
+  /** Absent for create-only importers (ADRs). */
+  updated?: number;
+  skipped: number;
+  failed: number;
+  dry_run: boolean;
+}
+
+/** One parsed principles row. A column the sheet lacks is `undefined`, which
+ *  the server reads as "leave this field as it is"; `""` clears it. */
+export interface PrincipleImportItem {
+  row_index: number;
+  title: string;
+  reference_number?: string;
+  description?: string;
+  rationale?: string;
+  implications?: string;
+  is_active?: string;
+  sort_order?: string;
+}
+
+/** One parsed decision row; the four sections are already HTML. */
+export interface AdrImportItem {
+  row_index: number;
+  title: string;
+  reference_number?: string;
+  context?: string;
+  decision?: string;
+  consequences?: string;
+  alternatives_considered?: string;
+  card_names: string[];
+  related_references: string[];
+  status?: string;
 }
 
 export type RecurrenceUnit = "none" | "days" | "weeks" | "months" | "years";

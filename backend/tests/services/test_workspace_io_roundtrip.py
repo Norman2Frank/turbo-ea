@@ -571,6 +571,251 @@ async def test_bookmark_column_state_roundtrips(db):
     assert restored.columns == ["core_name", "core_type"]
 
 
+async def test_bookmark_query_and_provenance_roundtrip(db):
+    """A query view's card query (keys only) and its provenance pair survive
+    an export → delete → import round-trip by introspection, verbatim."""
+    from app.models.bookmark import Bookmark
+
+    user = await create_user(db, email="bm-q@test.com", role="admin")
+    query = {
+        "type": "Organization",
+        "related": [
+            {
+                "relation": "relOrgToApp",
+                "type": "Application",
+                "where": {"lifecycle_phase": ["active"]},
+            }
+        ],
+    }
+    bm = Bookmark(
+        user_id=user.id,
+        name="Query View",
+        card_type="Organization",
+        filters={"types": ["Organization"]},
+        query=query,
+        created_via="mcp",
+        updated_via="mcp",
+    )
+    db.add(bm)
+    await db.flush()
+    bm_id = bm.id
+
+    raw = await build_bundle(db)
+
+    await db.execute(delete(Bookmark).where(Bookmark.id == bm_id))
+    await db.flush()
+
+    result = await apply_bundle(db, parse_bundle(raw), user)
+    assert result.total_failed == 0, result.as_dict()
+
+    restored = (await db.execute(select(Bookmark).where(Bookmark.id == bm_id))).scalar_one()
+    assert restored.query == query
+    assert restored.created_via == "mcp"
+
+
+async def test_bookmark_query_tags_follow_the_tag_and_an_unknown_one_is_dropped(db):
+    """A query view naming a tag lands on the tag's *new* id after the tag is
+    re-created on import; a tag id the bundle does not carry is dropped (it
+    would refuse the view on open), and a ``where`` left empty goes with it."""
+    from app.models.bookmark import Bookmark
+    from app.models.tag import Tag, TagGroup
+
+    user = await create_user(db, email="bm-qt@test.com", role="admin")
+    group = TagGroup(name="Hosting QT", mode="multi")
+    db.add(group)
+    await db.flush()
+    tag = Tag(tag_group_id=group.id, name="Cloud QT")
+    db.add(tag)
+    await db.flush()
+    unknown = "12345678-1234-4234-8234-123456789abc"
+    bm = Bookmark(
+        user_id=user.id,
+        name="Tagged Query View",
+        card_type="Organization",
+        filters={"types": ["Organization"]},
+        query={
+            "type": "Organization",
+            "related": [
+                {
+                    "relation": "relOrgToApp",
+                    "type": "Application",
+                    "where": {"tags": [str(tag.id), unknown], "lifecycle_phase": ["active"]},
+                    "related": [
+                        {
+                            "relation": "relAppToITC",
+                            "type": "ITComponent",
+                            "where": {"tags": [unknown]},
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    db.add(bm)
+    await db.flush()
+    bm_id, old_tag_id = bm.id, tag.id
+
+    raw = await build_bundle(db)
+
+    await db.execute(delete(Bookmark).where(Bookmark.id == bm_id))
+    await db.execute(delete(TagGroup).where(TagGroup.id == group.id))
+    await db.flush()
+
+    result = await apply_bundle(db, parse_bundle(raw), user)
+    assert result.total_failed == 0, result.as_dict()
+
+    new_tag = (await db.execute(select(Tag).where(Tag.name == "Cloud QT"))).scalar_one()
+    assert new_tag.id != old_tag_id
+    restored = (await db.execute(select(Bookmark).where(Bookmark.id == bm_id))).scalar_one()
+    assert restored.query == {
+        "type": "Organization",
+        "related": [
+            {
+                "relation": "relOrgToApp",
+                "type": "Application",
+                "where": {"tags": [str(new_tag.id)], "lifecycle_phase": ["active"]},
+                "related": [{"relation": "relAppToITC", "type": "ITComponent"}],
+            }
+        ],
+    }
+
+
+async def test_bookmark_query_cards_follow_the_card_and_an_unknown_one_is_dropped(db):
+    """A query view picking a card lands on the card's *new* id after the card
+    is re-created on import; a card id the bundle does not carry is dropped,
+    and ``include_descendants`` goes with a ``cards`` list left empty."""
+    from app.models.bookmark import Bookmark
+
+    user = await create_user(db, email="bm-qc@test.com", role="admin")
+    await create_card_type(db, key="Organization", label="Organization")
+    await create_card_type(db, key="Application", label="Application")
+    org = await create_card(db, card_type="Organization", name="Picked Org QC", user_id=user.id)
+    app = await create_card(db, card_type="Application", name="Picked App QC", user_id=user.id)
+    unknown = "12345678-1234-4234-8234-123456789abd"
+    bm = Bookmark(
+        user_id=user.id,
+        name="Picked Query View",
+        card_type="Organization",
+        filters={"types": ["Organization"]},
+        query={
+            "type": "Organization",
+            "where": {"cards": [str(org.id)], "include_descendants": True},
+            "related": [
+                {
+                    "relation": "relOrgToApp",
+                    "type": "Application",
+                    "where": {"cards": [unknown], "include_descendants": True},
+                },
+                {
+                    "relation": "relOrgToApp",
+                    "type": "Application",
+                    "where": {"cards": [unknown, str(app.id)]},
+                },
+            ],
+        },
+    )
+    db.add(bm)
+    await db.flush()
+    bm_id, old_ids = bm.id, {org.id, app.id}
+
+    raw = await build_bundle(db)
+
+    await db.execute(delete(Bookmark).where(Bookmark.id == bm_id))
+    await db.execute(delete(Card).where(Card.id.in_(old_ids)))
+    await db.flush()
+
+    result = await apply_bundle(db, parse_bundle(raw), user)
+    assert result.total_failed == 0, result.as_dict()
+
+    new_org = (await db.execute(select(Card).where(Card.name == "Picked Org QC"))).scalar_one()
+    new_app = (await db.execute(select(Card).where(Card.name == "Picked App QC"))).scalar_one()
+    assert {new_org.id, new_app.id}.isdisjoint(old_ids)
+    restored = (await db.execute(select(Bookmark).where(Bookmark.id == bm_id))).scalar_one()
+    assert restored.query == {
+        "type": "Organization",
+        "where": {"cards": [str(new_org.id)], "include_descendants": True},
+        "related": [
+            {"relation": "relOrgToApp", "type": "Application"},
+            {
+                "relation": "relOrgToApp",
+                "type": "Application",
+                "where": {"cards": [str(new_app.id)]},
+            },
+        ],
+    }
+
+
+async def test_a_stacked_bookmark_query_follows_the_cards_on_every_line(db):
+    """An ``any_of`` view over two card types round-trips with the picks of
+    every line on the cards' *new* ids, an unknown pick dropped and its
+    negated hop removed, every line kept."""
+    from app.models.bookmark import Bookmark
+
+    user = await create_user(db, email="bm-qs@test.com", role="admin")
+    await create_card_type(db, key="Organization", label="Organization")
+    await create_card_type(db, key="Application", label="Application")
+    org = await create_card(db, card_type="Organization", name="Stack Org QS", user_id=user.id)
+    app = await create_card(db, card_type="Application", name="Stack App QS", user_id=user.id)
+    unknown = "12345678-1234-4234-8234-123456789abe"
+    bm = Bookmark(
+        user_id=user.id,
+        name="Stacked Query View",
+        card_type=None,
+        filters={"types": ["Application", "Organization"]},
+        query={
+            "any_of": [
+                {
+                    "all_of": [
+                        {"type": "Application", "where": {"cards": [str(app.id)]}},
+                        {
+                            "type": "Application",
+                            "related": [
+                                {
+                                    "relation": "relOrgToApp",
+                                    "type": "Organization",
+                                    "where": {"cards": [unknown]},
+                                    "negate": True,
+                                }
+                            ],
+                        },
+                    ]
+                },
+                {"type": "Organization", "where": {"cards": [str(org.id), unknown]}},
+            ]
+        },
+    )
+    db.add(bm)
+    await db.flush()
+    bm_id, old_ids = bm.id, {org.id, app.id}
+
+    raw = await build_bundle(db)
+
+    await db.execute(delete(Bookmark).where(Bookmark.id == bm_id))
+    await db.execute(delete(Card).where(Card.id.in_(old_ids)))
+    await db.flush()
+
+    result = await apply_bundle(db, parse_bundle(raw), user)
+    assert result.total_failed == 0, result.as_dict()
+
+    new_org = (await db.execute(select(Card).where(Card.name == "Stack Org QS"))).scalar_one()
+    new_app = (await db.execute(select(Card).where(Card.name == "Stack App QS"))).scalar_one()
+    assert {new_org.id, new_app.id}.isdisjoint(old_ids)
+    restored = (await db.execute(select(Bookmark).where(Bookmark.id == bm_id))).scalar_one()
+    assert restored.card_type is None
+    assert restored.filters == {"types": ["Application", "Organization"]}
+    assert restored.query == {
+        "any_of": [
+            {
+                "all_of": [
+                    {"type": "Application", "where": {"cards": [str(new_app.id)]}},
+                    {"type": "Application"},
+                ]
+            },
+            {"type": "Organization", "where": {"cards": [str(new_org.id)]}},
+        ]
+    }
+
+
 async def test_resource_types_roundtrip(db):
     """A custom link type / file category survives an export → delete →
     import round-trip, keyed by (kind, key)."""
@@ -2042,3 +2287,120 @@ async def seed_default_categories_for_test(db):
 
     await seed_default_categories(db)
     await db.flush()
+
+
+async def test_custom_eol_products_round_trip(db):
+    """Custom EOL products and their cycles travel by natural key: a product
+    by its slug, a cycle by (slug, cycle). ``eol`` / ``support`` keep their
+    exact JSON value — a date string, ``true`` or ``false`` — and a version
+    string like "1.10" is not read back as a number."""
+    from app.models.eol_custom_cycle import EolCustomCycle
+    from app.models.eol_custom_product import EolCustomProduct
+
+    await create_role(db, key="admin", label="Admin", permissions={"*": True})
+    user = await create_user(db, email="eol-ws@test.com", role="admin")
+    db.add(
+        EolCustomProduct(
+            key="acme-erp",
+            title="Acme ERP",
+            description="In-house ERP",
+            link="https://acme.example/erp",
+            eol_category="server-app",
+            release_policy_note="Two years per release.",
+            created_by=user.id,
+        )
+    )
+    await db.flush()
+    db.add_all(
+        [
+            EolCustomCycle(
+                product_key="acme-erp",
+                cycle="1.10",
+                release_date="2020-01-01",
+                support=True,
+                eol="2024-06-30",
+                latest="1.10.4",
+            ),
+            EolCustomCycle(product_key="acme-erp", cycle="2", eol=False, support=None),
+        ]
+    )
+    await db.flush()
+
+    raw = await build_bundle(db)
+    cycle_rows = parse_bundle(raw).rows(schema.SHEET_EOL_CUSTOM_CYCLES)
+    assert {r["cycle"] for r in cycle_rows} == {"1.10", "2"}
+
+    await db.execute(delete(EolCustomCycle))
+    await db.execute(delete(EolCustomProduct))
+    await db.flush()
+
+    result = await apply_bundle(db, parse_bundle(raw), user)
+    assert result.total_failed == 0, result.as_dict()
+    product = (await db.execute(select(EolCustomProduct))).scalar_one()
+    assert (product.key, product.title, product.link) == (
+        "acme-erp",
+        "Acme ERP",
+        "https://acme.example/erp",
+    )
+    assert (product.eol_category, product.release_policy_note) == (
+        "server-app",
+        "Two years per release.",
+    )
+    cycles = {c.cycle: c for c in (await db.execute(select(EolCustomCycle))).scalars().all()}
+    assert set(cycles) == {"1.10", "2"}
+    old = cycles["1.10"]
+    assert (old.release_date, old.support, old.eol, old.latest) == (
+        "2020-01-01",
+        True,
+        "2024-06-30",
+        "1.10.4",
+    )
+    assert (cycles["2"].eol, cycles["2"].support) == (False, None)
+
+    again = await apply_bundle(db, parse_bundle(raw), user)
+    for sheet in (schema.SHEET_EOL_CUSTOM_PRODUCTS, schema.SHEET_EOL_CUSTOM_CYCLES):
+        section = next(s for s in again.sections if s.sheet == sheet)
+        assert (section.created, section.updated) == (0, 0), sheet
+
+
+async def test_principles_roundtrip_and_are_numbered_by_the_target(db):
+    """Principles travel by title; each instance numbers its own (``P-NNN``).
+
+    The source's reference is not carried (it could collide with a number the
+    target already uses), so a re-created principle takes the target's next
+    reference and a matched one keeps the reference it already had.
+    """
+    from app.models.ea_principle import EAPrinciple
+
+    user = await create_user(db, email="pr-ws@test.com", role="admin")
+    db.add_all(
+        [
+            EAPrinciple(title="Reuse first", reference_number="P-001", sort_order=10),
+            EAPrinciple(
+                title="Cloud first",
+                reference_number="P-002",
+                sort_order=20,
+                rationale="Elastic",
+            ),
+        ]
+    )
+    await db.flush()
+
+    raw = await build_bundle(db)
+    principles_sheet = parse_bundle(raw).rows(schema.SHEET_PRINCIPLES)
+    assert all("reference_number" not in row for row in principles_sheet)
+
+    # "Reuse first" stays (matched by title); "Cloud first" is re-created after
+    # a target-side principle took the next number.
+    await db.execute(delete(EAPrinciple).where(EAPrinciple.title == "Cloud first"))
+    db.add(EAPrinciple(title="Target only", reference_number="P-007", sort_order=5))
+    await db.flush()
+
+    result = await apply_bundle(db, parse_bundle(raw), user)
+    assert result.total_failed == 0, result.as_dict()
+
+    rows = {p.title: p for p in (await db.execute(select(EAPrinciple))).scalars().all()}
+    assert rows["Reuse first"].reference_number == "P-001"
+    assert rows["Target only"].reference_number == "P-007"
+    assert rows["Cloud first"].reference_number == "P-008"
+    assert rows["Cloud first"].rationale == "Elastic"

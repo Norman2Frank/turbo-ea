@@ -43,6 +43,12 @@ El resultado se muestra al usuario con:
 
 Los proveedores comerciales requieren una clave API, que se almacena cifrada en la base de datos mediante cifrado simétrico Fernet. Amazon Bedrock es la excepción: se autentica por defecto con el rol IAM del contenedor, así que no hay ninguna clave que almacenar ni rotar.
 
+### Servidores y pasarelas compatibles con OpenAI
+
+El tipo de proveedor **OpenAI** también funciona con cualquier servidor que hable la API Chat Completions de OpenAI —LM Studio, vLLM o una pasarela delante de ellos— introduciendo la dirección de ese servidor como **URL del proveedor**.
+
+Turbo EA pide a cada uno de esos proveedores una respuesta JSON (`response_format`) con una `temperature` baja. No todos los servidores o modelos aceptan ambas. Cuando un proveedor rechaza una de ellas, Turbo EA reenvía la solicitud sin ese parámetro y lee la respuesta del texto del modelo, así que no hay nada que configurar. **Probar conexión** envía la misma solicitud que una sugerencia e indica qué parámetro, si alguno, rechazó el proveedor.
+
 ---
 
 ## Proveedores de Búsqueda
@@ -195,6 +201,10 @@ Estos campos solo se sugieren cuando la IA encuentra evidencia clara — no se e
 !!! note
     Aparte de los campos específicos de Aplicación, las sugerencias de IA generan principalmente el campo de **descripción**. Los campos personalizados para otros tipos de fichas aún no están cubiertos.
 
+### Productos EOL personalizados
+
+El mismo botón aparece en los diálogos **Crear un producto EOL personalizado** y **Editar producto EOL personalizado** ([Administración de EOL](eol.md)), una vez que el producto tiene nombre. La sugerencia se redacta a partir del nombre del producto y de su enlace del proveedor, con una búsqueda del ciclo de vida de soporte del producto. Un producto personalizado no es un tipo de ficha, por lo que el interruptor por tipo anterior no se aplica: la función solo necesita que las sugerencias de IA estén activadas y configuradas, además del permiso `ai.suggest`.
+
 ---
 
 ## Análisis del portafolio
@@ -250,6 +260,8 @@ Las claves de permiso son `ai.suggest` y `ai.portfolio_insights`. Los roles pers
 | Sugerencias lentas | La velocidad de inferencia del LLM depende del hardware (para Ollama) o la latencia de red (para proveedores comerciales). Modelos más pequeños como `gemma3:4b` son más rápidos que los grandes. |
 | Puntuaciones de confianza bajas | El LLM puede no encontrar suficiente información relevante mediante búsqueda web. Intente un nombre de ficha más específico, o considere usar Google Custom Search para mejores resultados. |
 | La prueba de conexión falla | Verifique que la URL del proveedor sea accesible desde el contenedor del backend. Para configuraciones Docker, asegúrese de que ambos contenedores estén en la misma red. |
+| Probar conexión indica que el proveedor no acepta `response_format` o `temperature` | Nada que corregir: el proveedor funciona. Turbo EA omite ese parámetro en todas las solicitudes que le envía. Sin `response_format`, la respuesta depende de que el modelo siga la instrucción de responder en JSON; si las sugerencias llegan vacías, pruebe un modelo más capaz. |
+| «El proveedor de IA rechazó la solicitud» | Se llegó al proveedor, pero este rechazó la solicitud, y el mensaje indica su motivo (con un 401 o un 403, compruebe la clave de API y el acceso al modelo). Corrija el nombre del modelo o el ajuste del proveedor que se indica y haga clic en Probar Conexión: envía la misma solicitud que una sugerencia, por lo que ahora falla o funciona igual que ella. |
 | Bedrock devuelve «AccessDeniedException» | Dos causas posibles: al rol IAM le falta el permiso `bedrock:InvokeModel`, o no se ha habilitado el acceso a ese modelo en la consola de Bedrock. Compruebe ambas. |
 | Bedrock dice que no se admite el rendimiento bajo demanda | El modelo solo es accesible mediante un perfil de inferencia regional. Ejecute la prueba de conexión y elija un ID con prefijo `eu.`, `us.` o `apac.`. |
 | OpenAI rechaza un modelo con un 403 | La clave es válida, pero el proyecto de OpenAI no puede llamar a ese modelo. La prueba de conexión envía una petición breve al modelo configurado y muestra el motivo indicado por OpenAI. Conceda al proyecto acceso al modelo (o complete la verificación de la organización) en el panel de OpenAI, o elija otro modelo. |

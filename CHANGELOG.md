@@ -5,6 +5,137 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.198.2] - 2026-11-10
+
+### Fixed
+- AI suggestions work with OpenAI-compatible servers that refuse JSON mode or a custom temperature — LM Studio, and gateways in front of it such as Bionic — whatever form their error takes: the request is sent again without the refused parameter, with no setting to change ([#1372](https://github.com/vincentmakes/turbo-ea/discussions/1372)).
+- **Test Connection** for OpenAI-compatible and Azure OpenAI providers sends the same request a suggestion does, so it no longer passes while every suggestion is refused, and it names any parameter the provider does not accept.
+- An AI answer that wraps its JSON in a sentence or in the model's reasoning is read correctly instead of producing an empty suggestion.
+
+## [2.198.1] - 2026-11-10
+
+### Fixed
+- In the Layered Dependency View, a card keeps its type line when another **Show on card** option such as Alias is ticked beside it: the type is the first of the card's two lines instead of disappearing as soon as anything else is shown (#1377).
+
+## [2.198.0] - 2026-11-10
+
+### Changed
+- Inventory relation columns are now one per relationship, headed by its verb and card type (*uses IT Component*), so two relation types between the same card types, or the two directions of a self-referencing one, each get their own column; saved views and layouts keep their relation columns.
+
+## [2.197.0] - 2026-11-10
+
+### Added
+- In a query view, click a card type in the query string to add a column after Name listing, for each row, the cards at that step that made it match — such as the Applications and the end-of-life IT Components behind each Organization; click it again to remove the column, and the choice is saved with the view.
+
+## [2.196.0] - 2026-11-10
+
+### Added
+- Query views can combine several query lines — AND within a group, OR between groups — so one view can list several card types, such as Applications and Organizations together; add a line with the plus in the inventory query builder, or through the MCP server with `all_of` / `any_of`.
+- Query views can filter on end-of-life status — End of Life, Approaching EOL, Supported, Unknown or none — at the start card or at any relation step, such as *Applications that use an IT Component at End of Life*; the Views list shows how many conditions a query view has.
+- An **Inventory views** dashboard widget lists your saved inventory views — all you can open, your own or those shared with you, optionally query views only — and opens one in a click.
+
+## [2.195.0] - 2026-11-09
+
+### Added
+- **Multi-hop query views in the inventory**: a saved view can carry a chain of relations with lifecycle, subtype, field-value, approval-status, data-quality band, tag and specific-card conditions (with an *Include sub-cards* switch) at each step — such as *Organizations that use an active Application which an On Track Initiative affects* — re-run every time the view opens; build or edit one with the query builder above the grid (**New query view** in the Views tab), or have an assistant create it through the MCP server ([#1366](https://github.com/vincentmakes/turbo-ea/discussions/1366)).
+- Four MCP tools, `query_cards`, `list_inventory_views`, `save_inventory_view` and `list_tag_groups`, answer multi-hop questions in one call and save the query as an inventory view.
+- A `/inventory?view=<id>` link opens a saved inventory view directly.
+
+### Fixed
+- A saved view's OData feed now returns only the cards its query selects.
+
+## [2.194.0] - 2026-11-08
+
+### Added
+- **Layer boxes in the Layered Dependency View follow their cards**: a layer box (and a box of grouped relations) grows by itself as you drag a card against its edge, so cards can be moved beyond where the box first ended, and shrinks back as you move the card back, never below its original size; Create diagram keeps the size ([#1295](https://github.com/vincentmakes/turbo-ea/issues/1295)).
+
+### Changed
+- **Relation values include yes/no details**: with "Show relationship values" on, the Layered Dependency View lists every ticked yes/no detail after the verb, so a CRUD relation reads *CRUD [Create · Read]* instead of a bare *CRUD* ([#1285](https://github.com/vincentmakes/turbo-ea/issues/1285)).
+- **Long relation labels wrap instead of being cut off** in the Layered Dependency View: a label too long for one line continues on a second line, the values below the verb, so *is supported by [Create · Read · Update · Delete]* reads in full.
+
+## [2.193.0] - 2026-11-06
+
+### Added
+- Inventory: **Parent** in the Group by menu shows cards as a tree, alone or within any grouping; a child whose parent is elsewhere shows its ancestors before its name.
+- Inventory: a level stepper next to Group by expands or collapses the parent tree one level at a time.
+
+## [2.192.0] - 2026-11-06
+
+### Added
+- Cost Report and Capability Map: an **Attribution** choice (Full or Split equally) decides how a related card linked to several cards is counted; shared sources are marked, and the choice is saved with the report ([#1362](https://github.com/vincentmakes/turbo-ea/discussions/1362)).
+- The `get_cost_treemap` and `get_capability_heatmap` MCP tools take the same `attribution` option.
+
+### Fixed
+- The Cost Report's Total Cost no longer adds a related card once per card it links to; it counts each related card once.
+- Grouping the cost treemap by a related type lists a card under every group it links to, in a fixed order, instead of one arbitrary group.
+
+## [2.191.0] - 2026-11-05
+
+### Added
+- The six built-in stakeholder roles now come with a default description in every language, filled in on existing workspaces wherever the role has none.
+
+### Fixed
+- The card type drawer's Save button now also saves a stakeholder role being edited on the Stakeholder roles tab.
+- Clearing a stakeholder role's description and saving now removes it, instead of keeping the old text.
+- A translation you entered for a built-in stakeholder role's name or description is no longer overwritten when the server restarts.
+
+## [2.190.0] - 2026-11-05
+
+### Added
+- A field's help text is now shown while a card is read, as an info icon beside the field's label, and as a tooltip on the field's column header in the Inventory.
+- Stakeholder role descriptions are shown to users: as an info icon beside the role on a card's Stakeholders tab, under the role's name in the role picker, on the role's Inventory column header, in My roles and in the stakeholder directory; descriptions can be translated per language ([#1351](https://github.com/vincentmakes/turbo-ea/discussions/1351)).
+- Admin → Metamodel → Lifecycle phases lets administrators explain what each lifecycle phase means in their organisation, per language; the text appears as an info icon beside the phase on every card's Lifecycle section ([#1351](https://github.com/vincentmakes/turbo-ea/discussions/1351)).
+- Each lifecycle phase comes with a default explanation in every language; administrators can edit or clear it under Admin → Metamodel → Lifecycle phases.
+
+### Changed
+- The collapsible **Help** note under a field while editing a card or answering a survey is replaced by the same info icon shown beside the field when reading, so help looks and works the same in both modes.
+
+### Fixed
+- Role names in My roles, the stakeholder hover card and the stakeholder directory now follow the user's language.
+
+## [2.189.0] - 2026-11-05
+
+### Added
+- The task list in an initiative's Gantt tab can be sorted by title, completion, responsible, start date or end date by clicking a column header; nested work packages and tasks stay under their parent.
+
+### Fixed
+- The expand/collapse arrow in the Gantt task list no longer shows as an emoji play button on iOS Safari.
+
+## [2.188.0] - 2026-11-04
+
+### Added
+- Custom EOL products: when endoflife.date has no entry for a product, define it yourself with its release cycles and link cards to it like any endoflife.date product. Its status shows on the card, in the inventory's End of life column, in the EOL report and in the data quality figures.
+- Define a custom EOL product straight from a card's End of Life section, through a quiet link under the product search that opens the form with the card's name (or what you typed) filled in, and add a missing cycle from the cycle list.
+- Settings → EOL → Custom products: one row per product with its cycle count, latest cycle and version, worst status and linked cards, with filters, column freeze and reorder. Click a product to open a side panel where its details and release cycles are edited in place. A product or a cycle that cards still link cannot be deleted; rename the cycle instead, and its cards move with it.
+- The product panel's Contribute tab drafts the product's endoflife.date file, with a readiness checklist, the category and a release policy summary saved on the product, and opens it on GitHub so you can contribute the product from your own account.
+- "Switch to endoflife.date product…" moves a custom product's cards onto endoflife.date once it tracks the product, cycle by cycle; the grid points out custom products that endoflife.date now appears to cover.
+- The EOL report's Source filter and badges distinguish custom products from endoflife.date and from dates entered by hand.
+- A custom EOL product's description can be suggested by AI, like a card's, when AI suggestions are enabled.
+- End of Life can be tracked on any card type, custom ones included: turn on the End of Life section in the type's card layout and the type joins the card section, the EOL report, coverage figures, dashboards, the inventory column, bulk linking and the extension SDK's EOL status. It stays on by default for Applications and IT Components only.
+
+### Changed
+- The data quality and dashboard end-of-life coverage label "Linked to endoflife.date" now reads "Linked to an EOL product", since a link to a custom product counts too.
+- A card's End of Life status chip follows the same rule as the EOL report, the inventory column and the dashboards: Supported, Approaching EOL (within six months of the EOL date, or once active support has ended) or End of Life. The card no longer shows a "Security fixes only" status of its own.
+- A cycle whose active support is marked as already ended counts as Approaching EOL until its end of life, as endoflife.date treats it, on custom and endoflife.date products alike.
+- Every custom EOL cycle now needs an End of life value: a date, No end of life announced, or Already ended. Active support may stay unknown.
+- The card's End of Life section only offers Link, Change and Unlink to users who may edit the card.
+
+### Fixed
+- The card layout's End of Life switch showed the section as visible on card types where it never appeared; it now shows the section's real state.
+
+## [2.187.0] - 2026-11-04
+
+### Added
+- EA principles can be exported to Excel and imported back from Admin → Metamodel → EA Principles: a re-import updates the principles you edited, skips the unchanged ones and creates the new ones, with a preview of every change before anything is saved.
+- Every EA principle now has a reference number (P-001, P-002, …), shown next to its title; existing principles are numbered on upgrade.
+- Architecture decisions can be exported to Excel and imported from GRC → Governance → Decisions: the export follows the current filters, and the import creates a draft decision per row, linking cards by name and related decisions by reference, while skipping decisions that already exist.
+
+## [2.186.7] - 2026-11-04
+
+### Fixed
+- AI suggestions and portfolio insights work again with Anthropic Claude models that no longer accept a custom temperature, and Test Connection now fails or passes the same way a real suggestion does.
+- When the AI provider refuses a request, the error now says so and gives the provider's reason instead of reporting the provider as unreachable.
+
 ## [2.186.6] - 2026-11-02
 
 ### Changed
