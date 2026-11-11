@@ -1,12 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import type { ArchitectureDecision } from "@/types";
 
+// The discussion and history side panel has its own tests: here the page
+// renders alone, and the props it hands the panel are recorded.
+const sidePanel = vi.hoisted(() => ({ props: [] as Record<string, unknown>[] }));
+vi.mock("./collab/DocumentSidePanel", () => ({
+  default: (props: { children: unknown }) => {
+    sidePanel.props.push(props);
+    return props.children;
+  },
+}));
 vi.mock("@/api/client", () => ({
   api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
   ApiError: class ApiError extends Error {},
+  isAbortError: () => false,
 }));
 // Permissions gate extension panels; the default is the member the export
 // tests were written against.
@@ -31,13 +41,21 @@ vi.mock("./SignatureRequestDialog", () => ({
     open,
     onRequest,
     onClose,
+    decisionMakers,
+    openThreadCount,
   }: {
     open: boolean;
     onRequest: (ids: string[]) => void;
     onClose: () => void;
+    decisionMakers?: { display_name: string }[];
+    openThreadCount?: number;
   }) =>
     open ? (
-      <div data-testid="sign-dialog">
+      <div
+        data-testid="sign-dialog"
+        data-makers={(decisionMakers ?? []).map((p) => p.display_name).join(",")}
+        data-open-threads={String(openThreadCount)}
+      >
         <button type="button" onClick={() => onRequest(["u2", "u3"])}>
           request-two
         </button>
@@ -53,7 +71,7 @@ vi.mock("./SignatureRequestDialog", () => ({
 const exportAdrsToDocx = vi.fn();
 vi.mock("./adrExport", () => ({ exportAdrsToDocx: (...a: unknown[]) => exportAdrsToDocx(...a) }));
 
-import { api } from "@/api/client";
+import { api, ApiError } from "@/api/client";
 import { printAdr } from "./adrPrint";
 import ADREditor from "./ADREditor";
 import { setViewportWidth } from "@/test/matchMedia";
@@ -109,6 +127,13 @@ beforeEach(() => {
   exportAdrsToDocx.mockReset();
   authState.user = { id: "u1", permissions: {} };
 });
+
+
+/** Sign through the sign dialog: open it from the toolbar, then confirm. */
+async function signThroughDialog(u: { click: (el: Element) => Promise<void> }) {
+  await u.click(screen.getByRole("button", { name: /^draw Sign$/ }));
+  await u.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Sign" }));
+}
 
 describe("ADREditor — export trio in the title bar", () => {
   it("a draft offers Preview, PDF and Word, and PDF prints the live editor state", async () => {
@@ -237,10 +262,16 @@ describe("ADREditor — new decision", () => {
         decision: null,
         consequences: null,
         alternatives_considered: null,
+        decided_on: null,
+        effective_from: null,
+        valid_until: null,
+        decision_makers: [],
+        participants: [],
+        links: [],
       }),
     );
     // Lands on the created record, which loads it.
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/adr/adr-new"));
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/adr/adr-new", expect.anything()));
   });
 
   it("reports a failed create", async () => {
@@ -264,6 +295,12 @@ describe("ADREditor — draft actions", () => {
         decision: "<p>do it</p>",
         consequences: null,
         alternatives_considered: null,
+        decided_on: null,
+        effective_from: null,
+        valid_until: null,
+        decision_makers: [],
+        participants: [],
+        links: [],
       }),
     );
     expect(await screen.findByText("Saved successfully")).toBeInTheDocument();
@@ -298,7 +335,7 @@ describe("ADREditor — draft actions", () => {
       path === "/adr/adr-1/duplicate" ? { ...base, id: "adr-copy" } : {},
     );
     await userEvent.click(screen.getByRole("button", { name: /Duplicate/ }));
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/adr/adr-copy"));
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/adr/adr-copy", expect.anything()));
   });
 
   it("reports a failed duplicate", async () => {
@@ -332,7 +369,7 @@ describe("ADREditor — draft actions", () => {
       expect(api.post).toHaveBeenCalledWith("/adr/adr-1/request-signatures", { user_ids: ["u2", "u3"] }),
     );
     expect(await screen.findByText("Signature requests sent")).toBeInTheDocument();
-    expect(screen.getByText("in review")).toBeInTheDocument();
+    expect(screen.getByText("In Review")).toBeInTheDocument();
     expect(screen.getByText("0 of 2 signatures collected")).toBeInTheDocument();
     expect(screen.queryByTestId("sign-dialog")).toBeNull();
   });
@@ -375,27 +412,52 @@ describe("ADREditor — review actions", () => {
         : {},
     );
     expect(screen.getByText("1 of 2 signatures collected")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /^draw Sign$/ }));
+    await signThroughDialog(userEvent);
     expect(await screen.findByText("Decision fully signed")).toBeInTheDocument();
     expect(screen.getByText(/This decision was signed on/)).toBeInTheDocument();
   });
 
   it("records a signature that still leaves others pending", async () => {
     await renderLoaded(IN_REVIEW, () => ({ ...IN_REVIEW, signatories: IN_REVIEW.signatories }));
-    await userEvent.click(screen.getByRole("button", { name: /^draw Sign$/ }));
+    await signThroughDialog(userEvent);
     expect(await screen.findByText("Signature recorded")).toBeInTheDocument();
   });
 
-  it("reports a failed signature", async () => {
-    await renderLoaded(IN_REVIEW, () => new Error("x"));
-    await userEvent.click(screen.getByRole("button", { name: /^draw Sign$/ }));
-    expect(await screen.findByText("Failed to sign")).toBeInTheDocument();
+  it("reports a failed signature inside the sign dialog, which stays open and can try again", async () => {
+    let refuse = true;
+    await renderLoaded(IN_REVIEW, (path) =>
+      path === "/adr/adr-1/sign" ? (refuse ? new Error("x") : { ...IN_REVIEW, status: "signed" }) : {},
+    );
+    await signThroughDialog(userEvent);
+    const dialog = await screen.findByRole("dialog", { name: "Sign Decision" });
+    expect(await within(dialog).findByTestId("review-dialog-error")).toHaveTextContent("Failed to sign");
+    // Not (only) on the page behind the backdrop.
+    expect(screen.getAllByText("Failed to sign")).toHaveLength(1);
+    const confirm = within(dialog).getByRole("button", { name: "Sign" });
+    await waitFor(() => expect(confirm).toBeEnabled());
+
+    refuse = false;
+    await userEvent.click(confirm);
+    expect(await screen.findByText("Decision fully signed")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sign Decision" })).toBeNull());
   });
 
-  it("rejects with a comment, resetting to a new draft revision", async () => {
+  it("opens the sign dialog afresh, without the last refusal", async () => {
+    await renderLoaded(IN_REVIEW, () => new Error("x"));
+    await signThroughDialog(userEvent);
+    const dialog = await screen.findByRole("dialog", { name: "Sign Decision" });
+    await within(dialog).findByTestId("review-dialog-error");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: /^draw Sign$/ }));
+    const again = await screen.findByRole("dialog", { name: "Sign Decision" });
+    expect(within(again).queryByTestId("review-dialog-error")).toBeNull();
+  });
+
+  it("rejects with a comment, back to a draft that keeps its revision number", async () => {
     await renderLoaded(IN_REVIEW, (path, body) =>
       path === "/adr/adr-1/reject"
-        ? { ...IN_REVIEW, status: "draft", revision_number: 2, signatories: [], comment: body }
+        ? { ...IN_REVIEW, status: "draft", signatories: [], comment: body }
         : {},
     );
     await userEvent.click(screen.getByRole("button", { name: /^block Reject$/ }));
@@ -408,7 +470,8 @@ describe("ADREditor — review actions", () => {
       expect(api.post).toHaveBeenCalledWith("/adr/adr-1/reject", { comment: "Not costed" }),
     );
     expect(await screen.findByText("Decision rejected and reset to draft")).toBeInTheDocument();
-    expect(screen.getByText("Revision 2")).toBeInTheDocument();
+    expect(screen.getByText("ADR-0001")).toBeInTheDocument();
+    expect(screen.getByText("Draft")).toBeInTheDocument();
   });
 
   it("reports a failed rejection and cancels the dialog", async () => {
@@ -417,7 +480,12 @@ describe("ADREditor — review actions", () => {
     const dialog = within(await screen.findByRole("dialog"));
     await userEvent.type(dialog.getByLabelText("Reason for rejection"), "No");
     await userEvent.click(dialog.getByRole("button", { name: "Reject" }));
-    expect(await screen.findByText("Failed to reject decision", undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(await dialog.findByTestId("review-dialog-error", undefined, { timeout: 3000 })).toHaveTextContent(
+      "Failed to reject decision",
+    );
+    // The reason typed is still there, and Reject can be pressed again.
+    expect(dialog.getByLabelText("Reason for rejection")).toHaveValue("No");
+    await waitFor(() => expect(dialog.getByRole("button", { name: "Reject" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
@@ -441,23 +509,33 @@ describe("ADREditor — review actions", () => {
     expect(screen.getByRole("button", { name: /Recall Signatures$/ })).toBeInTheDocument();
   });
 
-  it("opens the sign or the reject dialog from a deep link", async () => {
+  it("opens the sign dialog from ?action=sign for a pending signatory, and the reject dialog from ?action=reject", async () => {
     serve(IN_REVIEW);
     const { unmount } = renderAt("/ea-delivery/adr/adr-1?action=sign");
-    expect(await screen.findByTestId("sign-dialog")).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Sign Decision" })).toBeInTheDocument();
+    expect(screen.queryByTestId("sign-dialog")).toBeNull();
     unmount();
 
     renderAt("/ea-delivery/adr/adr-1?action=reject");
     expect(await screen.findByText("Reject Decision")).toBeInTheDocument();
   });
+
+  it("opens the signature request dialog from ?action=sign for anyone not a pending signatory", async () => {
+    serve({ ...IN_REVIEW, signatories: [IN_REVIEW.signatories[1]] });
+    renderAt("/ea-delivery/adr/adr-1?action=sign");
+    expect(await screen.findByTestId("sign-dialog")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Sign Decision" })).toBeNull();
+  });
 });
 
 describe("ADREditor — signed decision", () => {
   it("is read-only, shows the banner and the signatory list, and revises", async () => {
+    authState.user = { id: "u1", permissions: { "adr.manage": true } };
     await renderLoaded(SIGNED, (path) =>
       path === "/adr/adr-1/revise" ? { ...SIGNED, id: "adr-rev" } : {},
     );
-    expect(screen.getByText(/This decision was signed on .* \(Revision 2\)/)).toBeInTheDocument();
+    expect(screen.getByText("This decision was signed on 2026-06-03 and is read-only.")).toBeInTheDocument();
+    expect(screen.getByText("ADR-0001 · Rev 2")).toBeInTheDocument();
     expect(screen.getByLabelText("Title")).toBeDisabled();
     expect(screen.queryByRole("button", { name: /Save$/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /Add Card/ })).toBeNull();
@@ -466,13 +544,17 @@ describe("ADREditor — signed decision", () => {
     expect(screen.getByText(/^Signed: /)).toBeInTheDocument();
     expect(screen.getByText("Pending")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /New Revision/ }));
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/adr/adr-rev"));
+    await userEvent.click(screen.getByRole("button", { name: /Revise/ }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Revise this decision/ }));
+    expect(api.post).toHaveBeenCalledWith("/adr/adr-1/revise", {});
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/adr/adr-rev", expect.anything()));
   });
 
   it("reports a failed revision", async () => {
+    authState.user = { id: "u1", permissions: { "adr.manage": true } };
     await renderLoaded(SIGNED, () => new Error("x"));
-    await userEvent.click(screen.getByRole("button", { name: /New Revision/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Revise/ }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Revise this decision/ }));
     expect(await screen.findByText("Failed to create revision")).toBeInTheDocument();
   });
 });
@@ -480,7 +562,7 @@ describe("ADREditor — signed decision", () => {
 describe("ADREditor — linked cards", () => {
   const LINKED = { ...base, linked_cards: [{ id: "card-1", name: "SAP S/4HANA", type: "Application" }] };
 
-  it("searches, links a card and refuses one already linked", async () => {
+  it("links a card through the card picker, offering only cards not yet linked", async () => {
     await renderLoaded(LINKED, (path, body) =>
       path === "/adr/adr-1/cards"
         ? {
@@ -490,50 +572,112 @@ describe("ADREditor — linked cards", () => {
         : {},
     );
     vi.mocked(api.get).mockImplementation(async (path: string) => {
-      if (path.startsWith("/cards?search=")) {
+      if (path.startsWith("/metamodel/")) return [] as never;
+      if (path.startsWith("/cards?")) {
         return {
           items: [
             { id: "card-1", name: "SAP S/4HANA", type: "Application" },
             { id: "card-2", name: "Kafka", type: "ITComponent" },
           ],
+          total: 2,
         } as never;
       }
       return {} as never;
     });
     await userEvent.click(screen.getByRole("button", { name: /Add Card/ }));
     const dialog = within(await screen.findByRole("dialog"));
-    await userEvent.type(dialog.getByPlaceholderText("Search cards..."), "ka");
-    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/cards?search=ka&page_size=20"));
-    expect(await dialog.findByText("Kafka")).toBeInTheDocument();
+    // The linked card is listed under "Already linked" and not offered.
     expect(dialog.getByText("Already linked")).toBeInTheDocument();
-    expect(dialog.getByText("SAP S/4HANA").closest("[role='button']")).toHaveAttribute("aria-disabled", "true");
+    expect(dialog.getByText("SAP S/4HANA")).toBeInTheDocument();
+    // Browse on open: the standard picker lists cards before anything is typed.
+    expect(await screen.findByRole("option", { name: "Kafka" })).toBeInTheDocument();
+    expect(api.get).toHaveBeenCalledWith("/cards?page=1&page_size=50");
+    expect(screen.queryByRole("option", { name: "SAP S/4HANA" })).toBeNull();
 
-    // Clearing the box clears the results.
-    await userEvent.clear(dialog.getByPlaceholderText("Search cards..."));
-    expect(dialog.queryByText("Kafka")).toBeNull();
-
-    await userEvent.type(dialog.getByPlaceholderText("Search cards..."), "k");
-    await userEvent.click(await dialog.findByText("Kafka"));
+    await userEvent.type(dialog.getByPlaceholderText("Search cards..."), "ka");
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/cards?page=1&page_size=50&search=ka"));
+    await userEvent.click(await screen.findByRole("option", { name: "Kafka" }));
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/adr/adr-1/cards", { card_id: "card-2" }));
+    expect(api.post).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByText("Kafka")).toBeInTheDocument();
   });
 
-  it("keeps the dialog usable when the search fails, reports a failed link, and cancels", async () => {
+  it("reports a failed link and cancels", async () => {
     await renderLoaded(LINKED, () => new Error("x"));
     vi.mocked(api.get).mockImplementation(async (path: string) => {
-      if (path === "/cards?search=x&page_size=20") throw new Error("search down");
-      return { items: [{ id: "card-3", name: "Redis", type: "ITComponent" }] } as never;
+      if (path.startsWith("/metamodel/")) return [] as never;
+      if (path.startsWith("/cards?")) {
+        return { items: [{ id: "card-3", name: "Redis", type: "ITComponent" }], total: 1 } as never;
+      }
+      return {} as never;
     });
     await userEvent.click(screen.getByRole("button", { name: /Add Card/ }));
     const dialog = within(await screen.findByRole("dialog"));
-    await userEvent.type(dialog.getByPlaceholderText("Search cards..."), "x");
-    expect(dialog.queryByText("Redis")).toBeNull();
-    await userEvent.type(dialog.getByPlaceholderText("Search cards..."), "y");
-    await userEvent.click(await dialog.findByText("Redis"));
+    await userEvent.click(await screen.findByRole("option", { name: "Redis" }));
     expect(await screen.findByText("Failed to link", undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(api.post).toHaveBeenCalledWith("/adr/adr-1/cards", { card_id: "card-3" });
     await userEvent.click(dialog.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  describe("link this card", () => {
+    const KAFKA_ID = "0b0e5b1e-6a0e-4c43-9b8e-2d1c4a5f7e01";
+    const SAP_ID = "card-1";
+    const mention = (id: string, label: string) =>
+      `<span data-type="mention" data-kind="card" data-id="${id}">@${label}</span>`;
+    const MENTIONING: ArchitectureDecision = {
+      ...LINKED,
+      context: `<p>uses ${mention(SAP_ID, "SAP S/4HANA")} and ${mention(KAFKA_ID, "Kafka")}</p>`,
+      consequences:
+        `<p>${mention(KAFKA_ID, "Kafka")} ` +
+        '<span data-type="mention" data-kind="card" data-restricted="true" data-token="ab12cd34"></span></p>',
+    };
+
+    it("offers one button per mentioned card that is not linked, and links it", async () => {
+      authState.user = { id: "u1", permissions: { "adr.manage": true } };
+      await renderLoaded(MENTIONING, (path, body) =>
+        path === "/adr/adr-1/cards"
+          ? {
+              ...MENTIONING,
+              linked_cards: [
+                ...LINKED.linked_cards,
+                { id: (body as { card_id: string }).card_id, name: "Kafka", type: "ITComponent" },
+              ],
+            }
+          : {},
+      );
+      const hint = within(screen.getByTestId("mentioned-unlinked"));
+      expect(hint.getByText("Mentioned in the text but not linked:")).toBeInTheDocument();
+      expect(hint.getAllByRole("button").map((b) => b.textContent)).toEqual(["add_linkKafka"]);
+      const button = hint.getByRole("button", { name: "add_link Kafka" });
+      expect(button).toHaveAccessibleDescription("Link this card");
+      await userEvent.click(button);
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith("/adr/adr-1/cards", { card_id: KAFKA_ID }),
+      );
+      expect(api.post).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.queryByTestId("mentioned-unlinked")).toBeNull());
+    });
+
+    it("is hidden without the permission to link", async () => {
+      authState.user = { id: "u1", permissions: {} };
+      await renderLoaded(MENTIONING);
+      expect(screen.queryByTestId("mentioned-unlinked")).toBeNull();
+    });
+
+    it("is hidden on a signed decision", async () => {
+      authState.user = { id: "u1", permissions: { "adr.manage": true } };
+      await renderLoaded({ ...MENTIONING, status: "signed" });
+      expect(screen.queryByTestId("mentioned-unlinked")).toBeNull();
+    });
+
+    it("is hidden when every mentioned card is linked", async () => {
+      authState.user = { id: "u1", permissions: { "adr.manage": true } };
+      await renderLoaded({ ...MENTIONING, context: `<p>${mention(SAP_ID, "SAP S/4HANA")}</p>`, consequences: null });
+      expect(screen.getByText("SAP S/4HANA")).toBeInTheDocument();
+      expect(screen.queryByTestId("mentioned-unlinked")).toBeNull();
+    });
   });
 
   it("unlinks a card, and reports a failed unlink", async () => {
@@ -640,5 +784,433 @@ describe("ADREditor — extension points", () => {
     });
     await renderLoaded(SIGNED);
     expect(screen.getByTestId("adr-panel")).toHaveTextContent("adr-1|signed|true|true");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Decision register: lock, new fields, banners, record, consolidate
+// ---------------------------------------------------------------------------
+
+describe("ADREditor — decision register", () => {
+  beforeEach(() => resetExtensionHost());
+  afterEach(() => resetExtensionHost());
+
+  const ADA = { user_id: "u1", display_name: "Ada" };
+  const BOARD = { user_id: null, display_name: "Board" };
+  const REVISION: ArchitectureDecision = {
+    ...base,
+    id: "adr-1",
+    revision_number: 2,
+    parent_id: "adr-0",
+    decided_on: "2026-05-01",
+    effective_from: "2026-06-01",
+    valid_until: null,
+    decision_makers: [ADA, BOARD],
+    participants: [],
+    change_summary: "Scope narrowed",
+    links: {
+      outgoing: [
+        {
+          id: "l1",
+          kind: "amends",
+          note: "§3",
+          decision: {
+            id: "adr-9",
+            reference_number: "ADR-0009",
+            revision_number: 1,
+            title: "Nine",
+            status: "signed",
+            standing: "in_force",
+          },
+        },
+      ],
+      incoming: [],
+    },
+  };
+
+  it("saves the dates, people, links and change summary with the content", async () => {
+    vi.mocked(api.patch).mockResolvedValue({} as never);
+    await renderLoaded(REVISION);
+    expect(screen.getByDisplayValue("Scope narrowed")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Valid until"), { target: { value: "2027-01-31" } });
+    await userEvent.click(screen.getByRole("button", { name: /Save$/ }));
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith("/adr/adr-1", {
+        title: "Adopt event bus",
+        context: "<p>ctx</p>",
+        decision: "<p>do it</p>",
+        consequences: null,
+        alternatives_considered: null,
+        decided_on: "2026-05-01",
+        effective_from: "2026-06-01",
+        valid_until: "2027-01-31",
+        decision_makers: [{ user_id: "u1" }, { name: "Board" }],
+        participants: [],
+        links: [{ decision_id: "adr-9", kind: "amends", note: "§3" }],
+        change_summary: "Scope narrowed",
+      }),
+    );
+  });
+
+  it("offers no change summary on a first revision", async () => {
+    await renderLoaded(base);
+    expect(screen.queryByLabelText("Change summary")).toBeNull();
+  });
+
+  it("in review locks the content but keeps the card links, and says how to edit", async () => {
+    registerExtension("vs", {
+      key: "vs",
+      sdkVersion: UI_SDK_VERSION,
+      adrPanels: [
+        {
+          id: "p",
+          component: (p: { readOnly: boolean; standing?: unknown; isCurrent?: unknown }) => (
+            <div data-testid="panel">{`${p.readOnly}|${String(p.standing)}|${String(p.isCurrent)}`}</div>
+          ),
+        },
+      ],
+      slots: [
+        {
+          slot: "adr.header",
+          id: "h",
+          component: (ctx: Record<string, unknown>) => <span data-testid="hdr">{String(ctx.readOnly)}</span>,
+        },
+        {
+          slot: "adr.signature.footer",
+          id: "f",
+          component: (ctx: Record<string, unknown>) => <span data-testid="ftr">{String(ctx.readOnly)}</span>,
+        },
+      ],
+    });
+    await renderLoaded({
+      ...IN_REVIEW,
+      ...REVISION,
+      status: "in_review",
+      signatories: IN_REVIEW.signatories,
+      linked_cards: [{ id: "card-1", name: "SAP S/4HANA", type: "Application" }],
+    });
+    expect(
+      screen.getByText("Sent for review: the content is locked. Recall the signatures to edit it."),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Title")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Save$/ })).toBeNull();
+    expect(screen.getByLabelText("Decided on")).toBeDisabled();
+    expect(screen.getByLabelText("Effective from")).toBeDisabled();
+    expect(screen.getByLabelText("Valid until")).toBeDisabled();
+    expect(screen.getByLabelText("Change summary")).toBeDisabled();
+    // People and links read back as text, no inputs.
+    expect(screen.getByText("Ada")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Add a link/ })).toBeNull();
+    expect(screen.getByRole("link", { name: "Amends ADR-0009" })).toBeInTheDocument();
+    expect(screen.getByText(/Files are locked with the decision/)).toBeInTheDocument();
+    // Card links are filing: still editable in review.
+    expect(screen.getByRole("button", { name: /Add Card/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unlink" })).toBeInTheDocument();
+    // Extensions are told to be read-only, except the post-decision footer.
+    expect(screen.getByTestId("panel")).toHaveTextContent("true|null|undefined");
+    expect(screen.getByTestId("hdr")).toHaveTextContent("true");
+    expect(screen.getByTestId("ftr")).toHaveTextContent("false");
+  });
+
+  it("a locked decision without links says so", async () => {
+    await renderLoaded({ ...SIGNED, links: { outgoing: [], incoming: [] } });
+    expect(screen.getByText("No links to other decisions.")).toBeInTheDocument();
+  });
+
+  it("passes standing and isCurrent to a panel on a signed decision", async () => {
+    registerExtension("vs", {
+      key: "vs",
+      sdkVersion: UI_SDK_VERSION,
+      adrPanels: [
+        {
+          id: "p",
+          component: (p: { readOnly: boolean; standing?: unknown; isCurrent?: unknown }) => (
+            <div data-testid="panel">{`${p.readOnly}|${String(p.standing)}|${String(p.isCurrent)}`}</div>
+          ),
+        },
+      ],
+      slots: [
+        {
+          slot: "adr.header",
+          id: "h",
+          component: (ctx: Record<string, unknown>) => (
+            <span data-testid="hdr">{`${String(ctx.standing)}|${String(ctx.isCurrent)}`}</span>
+          ),
+        },
+      ],
+    });
+    await renderLoaded({ ...SIGNED, standing: "amended", is_current: true });
+    expect(screen.getByTestId("panel")).toHaveTextContent("true|amended|true");
+    expect(screen.getByTestId("hdr")).toHaveTextContent("amended|true");
+    expect(screen.getByText("In force (amended)")).toBeInTheDocument();
+  });
+
+  it("reloads and explains when a save is refused because the decision locked meanwhile", async () => {
+    vi.mocked(api.patch).mockImplementationOnce(async () => {
+      throw Object.assign(new ApiError("locked"), { status: 403 });
+    });
+    await renderLoaded(base);
+    const loads = () => vi.mocked(api.get).mock.calls.filter(([p]) => p === "/adr/adr-1").length;
+    expect(loads()).toBe(1);
+    await userEvent.click(screen.getByRole("button", { name: /Save$/ }));
+    expect(
+      await screen.findByText(
+        "This decision is locked: it has been sent for review or signed. Its current state has been reloaded.",
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(loads()).toBe(2));
+  });
+
+  it("shows a refused save's problems as readable text, without reloading", async () => {
+    vi.mocked(api.patch).mockImplementationOnce(async () => {
+      throw Object.assign(new ApiError("bad"), {
+        status: 400,
+        detail: { error: "same_chain", problems: ["same_chain"] },
+      });
+    });
+    await renderLoaded(base);
+    await userEvent.click(screen.getByRole("button", { name: /Save$/ }));
+    expect(
+      await screen.findByText("A decision cannot be linked to one of its own revisions."),
+    ).toBeInTheDocument();
+    expect(vi.mocked(api.get).mock.calls.filter(([p]) => p === "/adr/adr-1")).toHaveLength(1);
+  });
+
+  it("an earlier revision points to the current one and shows its chain", async () => {
+    await renderLoaded({
+      ...SIGNED,
+      id: "adr-1",
+      revision_number: 1,
+      standing: "superseded",
+      is_current: false,
+      is_earlier_revision: true,
+      superseded_by: { id: "adr-2", reference_number: "ADR-0001", revision_number: 2, title: "x" },
+      revisions: [
+        { id: "adr-1", reference_number: "ADR-0001", revision_number: 1, title: "x", status: "signed", standing: "superseded" },
+        { id: "adr-2", reference_number: "ADR-0001", revision_number: 2, title: "x", status: "signed", standing: "in_force" },
+      ],
+    });
+    expect(
+      screen.getByText("This is an earlier revision. The current revision is ADR-0001 · Rev 2."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open current revision" })).toHaveAttribute(
+      "href",
+      "/ea-delivery/adr/adr-2",
+    );
+    expect(screen.getByRole("navigation", { name: "Revisions" })).toBeInTheDocument();
+    expect(screen.getByTestId("revision-adr-2")).toHaveTextContent("Rev 2· Current");
+  });
+
+  it("creates the consolidated revision of an amended decision and opens it", async () => {
+    authState.user = { id: "u1", permissions: { "adr.manage": true } };
+    await renderLoaded(
+      {
+        ...SIGNED,
+        standing: "amended",
+        amended_by: [
+          { id: "m1", reference_number: "ADR-0005", revision_number: 1, title: "A" },
+          { id: "m2", reference_number: "ADR-0006", revision_number: 2, title: "B" },
+        ],
+      },
+      (path) => (path === "/adr/adr-1/revise" ? { ...base, id: "adr-cons" } : {}),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Create consolidated revision" }));
+    expect(api.post).toHaveBeenCalledWith("/adr/adr-1/revise", { consolidates: ["m1", "m2"] });
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/adr/adr-cons", expect.anything()));
+    expect(await screen.findByText("New revision created")).toBeInTheDocument();
+  });
+
+  it("does not offer the consolidated revision without adr.manage", async () => {
+    await renderLoaded({
+      ...SIGNED,
+      standing: "amended",
+      amended_by: [{ id: "m1", reference_number: "ADR-0005", revision_number: 1, title: "A" }],
+    });
+    expect(screen.getByText("This decision is in force and has been amended by:")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create consolidated revision" })).toBeNull();
+  });
+
+  it("reports a refused consolidated revision", async () => {
+    authState.user = { id: "u1", permissions: { "adr.manage": true } };
+    await renderLoaded(
+      {
+        ...SIGNED,
+        standing: "amended",
+        amended_by: [{ id: "m1", reference_number: "ADR-0005", revision_number: 1, title: "A" }],
+      },
+      () => Object.assign(new Error("409"), { detail: { error: "not_revisable", reason: "not_latest" } }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Create consolidated revision" }));
+    expect(
+      await screen.findByText("A later revision exists: revise the current revision instead."),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a recorded decision: Recorded chip and line, no signatures, no signed banner", async () => {
+    await renderLoaded({
+      ...base,
+      status: "signed",
+      signed_at: null,
+      signatories: [],
+      recorded_at: "2026-06-05T08:00:00Z",
+      recorded_by: { user_id: "u9", display_name: "Ada" },
+      decision_makers: [ADA],
+    });
+    expect(screen.getByText("Recorded")).toBeInTheDocument();
+    expect(screen.getByText("Recorded by Ada on 2026-06-05, not signed in Turbo EA.")).toBeInTheDocument();
+    expect(screen.queryByText(/This decision was signed on/)).toBeNull();
+    expect(screen.queryByText(/signatures collected/)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Signatures" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Request Signatures/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Record as decided/ })).toBeNull();
+  });
+
+  it("offers Record as decided on a draft to adr.record holders only", async () => {
+    await renderLoaded(base);
+    expect(screen.queryByRole("button", { name: /Record as decided/ })).toBeNull();
+  });
+
+  it("offers Record as decided to the wildcard", async () => {
+    authState.user = { id: "u1", permissions: { "*": true } };
+    await renderLoaded(base);
+    expect(screen.getByRole("button", { name: "history_edu Record as decided" })).toBeInTheDocument();
+  });
+
+  it("does not offer Record as decided in review, even with adr.record", async () => {
+    authState.user = { id: "u1", permissions: { "adr.record": true } };
+    await renderLoaded(IN_REVIEW);
+    expect(screen.queryByRole("button", { name: /Record as decided/ })).toBeNull();
+  });
+
+  it("records a draft as decided: saves first, records, and shows it recorded", async () => {
+    authState.user = { id: "u1", permissions: { "adr.record": true } };
+    vi.mocked(api.patch).mockResolvedValue({} as never);
+    const recorded: ArchitectureDecision = {
+      ...base,
+      decision_makers: [ADA],
+      status: "signed",
+      decided_on: "2026-01-15",
+      effective_from: "2026-01-15",
+      recorded_at: "2026-11-10T09:00:00Z",
+      recorded_by: { user_id: "u1", display_name: "Ada" },
+    };
+    await renderLoaded({ ...base, decision_makers: [ADA] }, (path) =>
+      path === "/adr/adr-1/record" ? recorded : {},
+    );
+    // An unsaved edit: it has to reach the server before the record does.
+    await userEvent.type(screen.getByLabelText("Title"), " now");
+    await userEvent.click(screen.getByRole("button", { name: /Record as decided/ }));
+    const dialog = within(await screen.findByRole("dialog"));
+    fireEvent.change(dialog.getByTestId("record-decided-on"), { target: { value: "2026-01-15" } });
+    await userEvent.click(dialog.getByRole("button", { name: "Record" }));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/adr/adr-1/record", { decided_on: "2026-01-15" }),
+    );
+    // The pending edits went first, so the backend sees the decision makers on screen.
+    expect(api.patch).toHaveBeenCalledWith(
+      "/adr/adr-1",
+      expect.objectContaining({ title: "Adopt event bus now", decision_makers: [{ user_id: "u1" }] }),
+    );
+    expect(vi.mocked(api.patch).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(api.post).mock.invocationCallOrder[0],
+    );
+    expect(await screen.findByText("Decision recorded")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("Recorded")).toBeInTheDocument();
+    expect(screen.getByLabelText("Title")).toBeDisabled();
+  });
+
+  it("says why a signature request was refused", async () => {
+    await renderLoaded(base, () =>
+      Object.assign(new Error("409"), {
+        detail: { error: "link_target_not_locked", problems: ["link_target_not_locked"], target_ids: ["x"] },
+      }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Request Signatures/ }));
+    await userEvent.click(screen.getByRole("button", { name: "request-two" }));
+    expect(await screen.findByText("Every linked decision must be signed first.")).toBeInTheDocument();
+    expect(screen.queryByText("Failed to request signatures")).toBeNull();
+  });
+
+  it("hands the decision makers to the signature dialog", async () => {
+    await renderLoaded({ ...base, decision_makers: [ADA] });
+    await userEvent.click(screen.getByRole("button", { name: /Request Signatures/ }));
+    expect(screen.getByTestId("sign-dialog")).toHaveAttribute("data-makers", "Ada");
+  });
+});
+
+describe("ADREditor — discussion and review notes", () => {
+  it("mounts the side panel on a saved decision with its owner, status and sections", async () => {
+    sidePanel.props.length = 0;
+    await renderLoaded({ ...base, open_thread_count: 3, updated_at: "2026-11-01T00:00:00Z" });
+    const props = sidePanel.props[sidePanel.props.length - 1];
+    expect(props.owner).toEqual({ kind: "adr", id: "adr-1" });
+    expect(props.status).toBe("draft");
+    expect(props.openThreadCount).toBe(3);
+    expect(props.refreshKey).toBe("2026-11-01T00:00:00Z");
+    expect((props.sections as { key: string }[]).map((s) => s.key)).toEqual([
+      "general",
+      "context",
+      "decision",
+      "alternatives_considered",
+      "consequences",
+    ]);
+    expect((props.isDirty as () => boolean)()).toBe(false);
+  });
+
+  it("gives a new decision no side panel owner", async () => {
+    sidePanel.props.length = 0;
+    serve(base);
+    renderAt("/ea-delivery/adr/new");
+    expect(await screen.findByText("New Architecture Decision")).toBeInTheDocument();
+    expect(sidePanel.props[sidePanel.props.length - 1].owner).toBeNull();
+  });
+
+  it("applies a restored version through the same path as a save", async () => {
+    sidePanel.props.length = 0;
+    await renderLoaded(base);
+    const onRestored = sidePanel.props[sidePanel.props.length - 1].onRestored as (a: ArchitectureDecision) => void;
+    await waitFor(() => onRestored({ ...base, title: "Restored title" }));
+    expect(await screen.findByDisplayValue("Restored title")).toBeInTheDocument();
+  });
+
+  it("signs with a note sent as the comment, and warns about open threads", async () => {
+    await renderLoaded({ ...IN_REVIEW, open_thread_count: 2 }, () => ({ ...IN_REVIEW, open_thread_count: 2 }));
+    await userEvent.click(screen.getByRole("button", { name: /^draw Sign$/ }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByText("Sign Decision")).toBeInTheDocument();
+    expect(dialog.getByTestId("open-threads-warning")).toHaveTextContent("2 open discussion threads on this document.");
+    await userEvent.type(dialog.getByLabelText("Note (optional)"), "  Agreed  ");
+    await userEvent.click(dialog.getByRole("button", { name: "Sign" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/adr/adr-1/sign", { comment: "Agreed" }));
+  });
+
+  it("shows no warning without open threads, and the side panel's live count once it reports", async () => {
+    sidePanel.props.length = 0;
+    await renderLoaded({ ...IN_REVIEW, open_thread_count: 0 });
+    await userEvent.click(screen.getByRole("button", { name: /^draw Sign$/ }));
+    expect(within(await screen.findByRole("dialog")).queryByTestId("open-threads-warning")).toBeNull();
+    const report = sidePanel.props[sidePanel.props.length - 1].onOpenCountChange as (n: number) => void;
+    await waitFor(() => report(1));
+    expect(await screen.findByText("1 open discussion thread on this document.")).toBeInTheDocument();
+  });
+
+  it("warns in the reject dialog and refuses a reason over 4000 characters", async () => {
+    await renderLoaded({ ...IN_REVIEW, open_thread_count: 1 });
+    await userEvent.click(screen.getByRole("button", { name: /^block Reject$/ }));
+    const dialog = within(await screen.findByRole("dialog"));
+    expect(dialog.getByTestId("open-threads-warning")).toHaveTextContent("1 open discussion thread on this document.");
+    const field = dialog.getByLabelText("Reason for rejection");
+    fireEvent.change(field, { target: { value: "x".repeat(4001) } });
+    expect(dialog.getByRole("button", { name: "Reject" })).toBeDisabled();
+    expect(dialog.getByText("4001 / 4000")).toBeInTheDocument();
+    fireEvent.change(field, { target: { value: "x".repeat(4000) } });
+    expect(dialog.getByRole("button", { name: "Reject" })).toBeEnabled();
+  });
+
+  it("hands the open-thread count to the signature request dialog", async () => {
+    await renderLoaded({ ...base, open_thread_count: 4 });
+    await userEvent.click(screen.getByRole("button", { name: /Request Signatures/ }));
+    expect(await screen.findByTestId("sign-dialog")).toHaveAttribute("data-open-threads", "4");
   });
 });

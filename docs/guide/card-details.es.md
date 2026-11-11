@@ -231,9 +231,11 @@ Todo lo que mueve la fecha **Modificado** de la ficha aparece aquí: una edició
 
 ## Pestaña de ADR
 
-Cada ficha cuenta con una pestaña **ADR** que enumera las [decisiones de arquitectura](delivery.md) vinculadas a ella, mostrando la referencia, el título, el estado, todas sus fichas vinculadas y la fecha de la última modificación. Haga clic en una fila para abrir la decisión.
+Cada ficha cuenta con una pestaña **ADR** que enumera las [decisiones de arquitectura](delivery.md) vinculadas a ella — la revisión actual de cada decisión, más cualquier revisión en redacción — mostrando la referencia, el título, la vigencia (o su estado mientras aún no esté firmada), todas sus fichas vinculadas y la fecha de la última modificación. Haga clic en una fila para abrir la decisión; las revisiones anteriores se abren desde ella.
 
 Si tiene permiso para gestionar vínculos de ADR, la pestaña también ofrece **Vincular ADR** para adjuntar una decisión existente y **Crear ADR** para crear una nueva ya vinculada a esta ficha, además de una acción de desvinculación en cada fila. En las fichas sin decisiones vinculadas la pestaña permanece oculta salvo que tenga ese permiso, de modo que los usuarios de solo lectura nunca ven una pestaña vacía.
+
+Debajo de la lista, **Mencionado en** enumera las decisiones y Declaraciones de Trabajo de Arquitectura cuyo texto menciona esta ficha, y aquellas cuya discusión la menciona (marcadas *en la discusión*), con la referencia o revisión de cada documento y su vigencia o estado. Una mención no vincula la ficha a la decisión; solo se muestra aquí. La lista solo muestra los documentos que puede abrir y no aparece cuando no hay ninguno. Véase [Menciones](grc.md#decision-mentions).
 
 ## Pestaña de Riesgos (GRC activado, cuando aplique)
 

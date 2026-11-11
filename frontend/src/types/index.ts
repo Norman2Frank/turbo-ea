@@ -1285,11 +1285,117 @@ export interface SoAW {
   parent_id: string | null;
   signatories: SoAWSignatory[];
   signed_at: string | null;
+  /** Exactly one revision per chain is current (the last signed one, else the first). */
+  is_current?: boolean;
+  /** True on a revision that a later signed revision of the chain supersedes. */
+  is_earlier_revision?: boolean;
+  /** On an earlier revision: the chain's current revision. */
+  superseded_by?: SoAWRef | null;
+  /** On the current revision: the unsigned revision being worked on after it. */
+  open_revision?: (SoAWRef & { status: SoAW["status"] }) | null;
+  /** `GET /soaw/{id}` only: the whole chain in order. */
+  revisions?: SoAWRevision[];
+  /** Detail only: unresolved discussion threads on this revision. */
+  open_thread_count?: number;
+}
+
+/** A pointer to another revision of a SoAW chain. */
+export interface SoAWRef {
+  id: string;
+  name: string;
+  revision_number: number;
+}
+
+export interface SoAWRevision extends SoAWRef {
+  status: SoAW["status"];
+  signed_at?: string | null;
 }
 
 // ---------------------------------------------------------------------------
 // Architecture Decision Records
 // ---------------------------------------------------------------------------
+
+/**
+ * Where a signed decision stands today, derived by the backend
+ * (`services/decision_standing.py`); `null` on a decision that is not signed.
+ */
+export type DecisionStanding =
+  | "scheduled"
+  | "in_force"
+  | "amended"
+  | "superseded"
+  | "revoked"
+  | "expired";
+
+/** A pointer to one decision revision. */
+export interface DecisionRef {
+  id: string;
+  reference_number: string;
+  revision_number: number;
+  title: string;
+}
+
+export type DecisionLinkKind = "replaces" | "amends" | "revokes" | "relates" | "consolidates";
+
+/** The other decision of a link: the exact revision linked, plus its chain's
+ *  current revision when that is another one. */
+export interface DecisionLinkDecision extends DecisionRef {
+  status: ArchitectureDecision["status"];
+  standing: DecisionStanding | null;
+  current?: { id: string; reference_number: string; revision_number: number };
+}
+
+export interface DecisionLinkEntry {
+  id: string | null;
+  kind: DecisionLinkKind;
+  note: string | null;
+  /** The target of an outgoing link, the source of an incoming one. */
+  decision: DecisionLinkDecision;
+}
+
+export interface DecisionLinks {
+  outgoing: DecisionLinkEntry[];
+  incoming: DecisionLinkEntry[];
+}
+
+/** A link as written on `POST /adr` / `PATCH /adr/{id}` (replace-set). */
+export interface DecisionLinkInput {
+  decision_id: string;
+  kind: DecisionLinkKind;
+  note?: string | null;
+}
+
+/** A decision maker or participant: a Turbo EA user, or a free-text name
+ *  (`user_id` null). `display_name` is the stored name snapshot. */
+export interface DecisionPerson {
+  user_id: string | null;
+  display_name: string;
+}
+
+/** A person as written on `POST /adr` / `PATCH /adr/{id}`. */
+export type DecisionPersonInput = { user_id: string } | { name: string };
+
+/** A signed change to the chain that has not taken effect yet. */
+export interface DecisionUpcoming {
+  kind: "revision" | "replaces" | "revokes";
+  by: DecisionRef;
+  effective_from: string | null;
+}
+
+/** A file attached to a decision (`GET /adr/{id}/files`, `files` on the detail). */
+export interface DecisionFile {
+  id: string;
+  name: string;
+  mime_type: string;
+  size: number;
+  created_at: string | null;
+  created_by: { user_id: string; display_name: string | null } | null;
+}
+
+export interface DecisionRevision extends DecisionRef {
+  status: ArchitectureDecision["status"];
+  standing: DecisionStanding | null;
+}
 
 export interface ArchitectureDecision {
   id: string;
@@ -1318,6 +1424,191 @@ export interface ArchitectureDecision {
   updated_at: string | null;
   /** `GET /adr?include_content=true` only: `related_decisions` as reference numbers. */
   related_references?: string[];
+  /** `GET /adr?include_content=true` only: each hard link kind's targets as
+   *  reference numbers (`relates` stays in `related_references`). */
+  link_references?: Partial<Record<"replaces" | "amends" | "revokes" | "consolidates", string[]>>;
+  // --- Decision register (derived by the backend; optional so older fixtures
+  // and payloads still type-check) ---
+  standing?: DecisionStanding | null;
+  is_current?: boolean;
+  is_earlier_revision?: boolean;
+  /** On an earlier revision: the chain's current revision; on a replaced
+   *  decision: the decision that replaced it. */
+  superseded_by?: DecisionRef | null;
+  revoked_by?: DecisionRef | null;
+  amended_by?: DecisionRef[];
+  /** On the current revision: the unsigned revision being drafted after it. */
+  open_revision?: DecisionRef | null;
+  upcoming?: DecisionUpcoming[];
+  /** On an amending decision: the revision that consolidated its amendment. */
+  consolidated_into?: DecisionRef | null;
+  /** ISO dates (`YYYY-MM-DD`). */
+  decided_on?: string | null;
+  effective_from?: string | null;
+  valid_until?: string | null;
+  /** Set on a decision recorded as decided outside Turbo EA (no signatures). */
+  recorded_at?: string | null;
+  decision_makers?: DecisionPerson[];
+  // --- `GET /adr/{id}` only ---
+  links?: DecisionLinks;
+  participants?: DecisionPerson[];
+  revisions?: DecisionRevision[];
+  change_summary?: string | null;
+  recorded_by?: { user_id: string; display_name: string | null } | null;
+  files?: DecisionFile[];
+  /** Detail only: unresolved discussion threads on this revision. */
+  open_thread_count?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Discussion and history of a decision or SoAW (the document side panel)
+// ---------------------------------------------------------------------------
+
+/** What a discussion or a history belongs to. */
+export type DocumentKind = "adr" | "soaw";
+
+export interface DocumentOwner {
+  kind: DocumentKind;
+  id: string;
+}
+
+/** A person as the collaboration routes name one. */
+export interface DocumentUserRef {
+  id: string;
+  display_name: string;
+}
+
+/** `rejection`: a review was rejected with this reason; `sign_note`: a signer's note. */
+export type DocumentCommentKind = "comment" | "rejection" | "sign_note";
+
+/** One comment, top-level or a reply (`GET /{adr|soaw}/{id}/comments`). */
+export interface DocumentComment {
+  id: string;
+  kind: DocumentCommentKind;
+  section: string | null;
+  /** The revision the thread was started on: replies and resolves go there. */
+  revision_id: string;
+  revision_number: number;
+  author: DocumentUserRef | null;
+  /** The name kept when the author's account is gone. */
+  author_name: string | null;
+  /** HTML; `""` once deleted. */
+  body: string;
+  created_at: string;
+  edited_at: string | null;
+  deleted: boolean;
+  resolved_at: string | null;
+  resolved_by: DocumentUserRef | null;
+  can: { edit: boolean; delete: boolean; resolve: boolean };
+}
+
+export interface DocumentThread extends DocumentComment {
+  replies: DocumentComment[];
+}
+
+export interface DocumentDiscussion {
+  can: { comment: boolean; moderate: boolean };
+  /** Unresolved, undeleted threads of the path document only. */
+  open_count: number;
+  threads: DocumentThread[];
+}
+
+/** A POST / PATCH reply: the thread, and who a mention could not notify. */
+export interface DocumentThreadWrite extends DocumentThread {
+  unnotified_mentions?: DocumentUserRef[];
+}
+
+export type DocumentHistoryKind =
+  | "created"
+  | "baseline"
+  | "save"
+  | "restored"
+  | "revised"
+  | "sent_for_review"
+  | "signature"
+  | "signed"
+  | "rejected"
+  | "recalled"
+  | "recorded";
+
+/** One timeline row (`GET /{adr|soaw}/{id}/history`). */
+export interface DocumentHistoryEntry {
+  id: string;
+  kind: DocumentHistoryKind;
+  actor: DocumentUserRef | null;
+  actor_name: string | null;
+  /** A rejection's reason, a signing note, or (on `restored`) the source entry's id. */
+  note: string | null;
+  created_at: string;
+  /** A saved version that can be viewed and compared. */
+  has_content: boolean;
+  /** On a `restored` row: the version it brought back (null once that is gone). */
+  restored_from?: { id: string; kind: DocumentHistoryKind; created_at: string } | null;
+}
+
+export interface DocumentHistoryPage {
+  can_view_versions: boolean;
+  can_restore: boolean;
+  total: number;
+  entries: DocumentHistoryEntry[];
+}
+
+/** A person in a saved decision version. */
+export interface VersionPerson {
+  user_id: string | null;
+  display_name: string;
+}
+
+/** What a saved decision version holds (HTML with mentions resolved for the reader). */
+export interface DecisionVersionContent {
+  title: string;
+  context: string | null;
+  decision: string | null;
+  consequences: string | null;
+  alternatives_considered: string | null;
+  decided_on: string | null;
+  effective_from: string | null;
+  valid_until: string | null;
+  change_summary: string | null;
+  decision_makers: VersionPerson[] | null;
+  participants: VersionPerson[] | null;
+}
+
+/** A SoAW section as a version stores it (custom sections carry their title). */
+export type SoawVersionSection = SoAWSectionData & { title?: string; insertAfter?: string };
+
+/** What a saved SoAW version holds. */
+export interface SoawVersionContent {
+  name: string;
+  document_info: SoAWDocumentInfo | null;
+  version_history: SoAWVersionEntry[] | null;
+  sections: Record<string, SoawVersionSection> | null;
+}
+
+/** `GET /{adr|soaw}/{id}/history/{entry_id}`. */
+export interface DocumentVersion {
+  entry: DocumentHistoryEntry;
+  content: DecisionVersionContent | SoawVersionContent;
+}
+
+/** `GET /mentions/cards/{id}` and `/mentions/decisions/{id}`. */
+export interface MentionedIn {
+  decisions: {
+    id: string;
+    reference_number: string;
+    revision_number: number;
+    title: string;
+    status: ArchitectureDecision["status"];
+    standing: DecisionStanding | null;
+    via: "text" | "comment";
+  }[];
+  soaws: {
+    id: string;
+    name: string;
+    revision_number: number;
+    status: SoAW["status"];
+    via?: "text" | "comment";
+  }[];
 }
 
 export interface FileAttachment {
@@ -2854,6 +3145,8 @@ export interface AdrImportItem {
   card_names: string[];
   related_references: string[];
   status?: string;
+  /** Picks among several rows of one reference: the highest is imported. */
+  revision_number?: number | string;
 }
 
 export type RecurrenceUnit = "none" | "days" | "weeks" | "months" | "years";

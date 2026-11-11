@@ -231,9 +231,11 @@ Alles, was das Datum **Geändert** der Karte verschiebt, erscheint hier — eine
 
 ## ADRs-Tab
 
-Jede Karte besitzt einen **ADRs**-Tab, der die mit ihr verknüpften [Architekturentscheidungen](delivery.md) auflistet — mit Referenz, Titel, Status, allen verknüpften Karten und dem Zeitpunkt der letzten Änderung. Klicken Sie auf eine Zeile, um die Entscheidung zu öffnen.
+Jede Karte besitzt einen **ADRs**-Tab, der die mit ihr verknüpften [Architekturentscheidungen](delivery.md) auflistet — die aktuelle Revision jeder Entscheidung sowie jede Revision, die gerade entworfen wird — mit Referenz, Titel, Geltung (oder ihrem Status, solange sie noch nicht unterzeichnet ist), allen verknüpften Karten und dem Zeitpunkt der letzten Änderung. Klicken Sie auf eine Zeile, um die Entscheidung zu öffnen; frühere Revisionen erreichen Sie von dort aus.
 
 Wenn Sie ADR-Verknüpfungen verwalten dürfen, bietet der Tab zusätzlich **ADR verknüpfen**, um eine bestehende Entscheidung anzuhängen, und **ADR erstellen**, um eine neue anzulegen, die bereits mit dieser Karte verknüpft ist — sowie eine Aktion zum Aufheben der Verknüpfung in jeder Zeile. Auf Karten ohne verknüpfte Entscheidungen ist der Tab ausgeblendet, sofern Sie diese Berechtigung nicht besitzen; Benutzer mit reinem Lesezugriff sehen also nie einen leeren Tab.
+
+Unter der Liste führt **Erwähnt in** die Entscheidungen und Statements of Architecture Work auf, deren Text diese Karte erwähnt, sowie jene, deren Diskussion sie erwähnt (markiert mit *in der Diskussion*), jeweils mit der Referenz oder Revision des Dokuments und seiner Geltung oder seinem Status. Eine Erwähnung verknüpft die Karte nicht mit der Entscheidung; sie erscheint nur hier. Die Liste zeigt nur Dokumente, die Sie öffnen können, und entfällt, wenn es keine gibt. Siehe [Erwähnungen](grc.md#decision-mentions).
 
 ## Risiken-Tab (GRC aktiviert, falls vorhanden)
 

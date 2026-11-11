@@ -155,7 +155,7 @@ L'icona **apri in una nuova scheda** nella barra degli strumenti apre il [report
 
 Applicate tag dai [gruppi di tag](../admin/tags.md) configurati. A seconda della modalità del gruppo, potete selezionare un tag (selezione singola) o più tag (selezione multipla).
 
-### Scheda Risorse
+### Scheda Risorse {: #resources-tab }
 
 La scheda **Risorse** consolida tutti i materiali di supporto per una card:
 
@@ -229,9 +229,11 @@ Tutto ciò che sposta la data **Modificato** della card compare qui: una modific
 
 ## Scheda ADR
 
-Ogni card dispone di una scheda **ADR** che elenca le [decisioni architetturali](delivery.md) collegate, mostrando riferimento, titolo, stato, tutte le card collegate e la data dell'ultima modifica. Fare clic su una riga per aprire la decisione.
+Ogni card dispone di una scheda **ADR** che elenca le [decisioni architetturali](delivery.md) collegate — la revisione corrente di ogni decisione, più l'eventuale revisione in fase di redazione — mostrando riferimento, titolo, vigenza (o lo stato, finché non è ancora firmata), tutte le card collegate e la data dell'ultima modifica. Fare clic su una riga per aprire la decisione; le revisioni precedenti sono raggiungibili da lì.
 
 Se si è autorizzati a gestire i collegamenti ADR, la scheda offre anche **Collega ADR** per allegare una decisione esistente e **Crea ADR** per crearne una già collegata a questa card, oltre a un'azione di scollegamento su ogni riga. Sulle card prive di decisioni collegate la scheda resta nascosta a meno che non si disponga di tale autorizzazione, così gli utenti in sola lettura non vedono mai una scheda vuota.
+
+Sotto l'elenco, **Menzionata in** elenca le decisioni e gli Statement of Architecture Work il cui testo menziona questa card, e quelli la cui discussione la menziona (contrassegnati *nella discussione*), con il riferimento o la revisione di ciascun documento e la sua vigenza o il suo stato. Una menzione non collega la card alla decisione; compare soltanto qui. L'elenco mostra solo i documenti che si possono aprire e viene omesso quando non ce ne sono. Vedere [Menzioni](grc.md#decision-mentions).
 
 ## Scheda Rischi (GRC abilitato, quando presente)
 
