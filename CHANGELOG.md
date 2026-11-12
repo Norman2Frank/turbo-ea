@@ -5,6 +5,37 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.202.0] - 2026-11-12
+
+### Changed
+- **MCP BPMN import saves a draft**: `import_bpmn` no longer submits and publishes the diagram it imports; it saves it as a draft, based on the published flow when there is one, and returns the draft's revision and a link that opens it in the editor ([#1390](https://github.com/vincentmakes/turbo-ea/discussions/1390)).
+
+### Added
+- **MCP process-flow tools**: `import_bpmn` can update an existing draft in place (`draft_version_id`) or start a new draft from a chosen version (`based_on_version_id`), and four new tools list and read a process's flow versions (`list_process_flow_versions`, `get_process_flow_version`) and submit or approve a draft as separate steps (`submit_process_flow`, `approve_process_flow`) under the usual BPM permissions.
+
+### Fixed
+- Notifications and to-dos about a process flow being submitted, approved, rejected or withdrawn open the card's Process Flow tab on the Drafts or Published sub-tab instead of the Card tab.
+
+## [2.201.2] - 2026-11-11
+
+### Fixed
+- The role marked as default in Users & Roles is now applied when a user is created from the application: the Create user dialog opens with it selected, and a user invited from a card's Stakeholders tab receives it instead of always becoming a Member ([#1388](https://github.com/vincentmakes/turbo-ea/issues/1388)).
+
+## [2.201.1] - 2026-11-11
+
+### Fixed
+- Azure Hosted OpenAI works with the endpoint the Azure portal shows for newer deployments, the one ending in `/openai/v1/`: Test Connection, AI suggestions and TurboLens no longer fail with 404, and the API Version field is switched off for it because that endpoint takes none ([#1386](https://github.com/vincentmakes/turbo-ea/issues/1386)).
+- A Provider URL pasted with a trailing `/openai` or as a deployment's full target URI is accepted.
+- An Azure 404 in Test Connection says what to check — the Provider URL and whether API Version holds an API version rather than the model's version — instead of always reporting a missing deployment.
+
+## [2.201.0] - 2026-11-11
+
+### Changed
+- **History of decisions and SoAWs** opens from a **History** button at the top of the page, in one view with the timeline and the selected version (or what changed in it) side by side; the side panel now holds the discussion only.
+- **Mentions**: the **@** list shows each card's type, icon, subtype and parent and each decision's reference, title and standing, lists the decision's linked cards and the document's signatories, decision makers and participants first, and a **Browse…** entry and a **Mention…** toolbar button open the standard pickers to insert several mentions at once.
+- **Discussion sections**: a thread is tagged to a section with a chip instead of the *About* dropdown, and chips at the top of the discussion, each with its thread count, filter the threads by section; every section shows a chat icon beside its heading (its open-thread count, or muted once all are resolved) that opens the discussion on it with the section already selected for a new comment.
+- **Deleted comments** in the discussion of decisions and SoAWs shrink to one small line with their author and date, and a thread whose first comment is deleted can no longer be replied to, resolved or reopened; the replies already there stay.
+
 ## [2.200.1] - 2026-11-11
 
 ### Fixed
