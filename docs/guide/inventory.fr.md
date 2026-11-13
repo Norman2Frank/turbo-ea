@@ -35,7 +35,7 @@ Un **badge de nombre de filtres actifs** indique combien de filtres sont actuell
 
 Faites un clic droit sur n'importe quelle cellule de la grille (appui long sur un appareil tactile) pour ouvrir un menu contextuel d'actions rapides sur ce qui se trouve sous le curseur, à la manière de ServiceNow :
 
-- **Aperçu de la fiche** — ouvrir la fiche nommée par la cellule dans le panneau latéral, sans quitter la grille ; le panneau laisse la grille utilisable : vous pouvez continuer à faire défiler, filtrer et cliquer sur d'autres lignes tant qu'il est ouvert, puis le fermer avec son bouton de fermeture
+- **Aperçu de la fiche** — ouvrir la fiche nommée par la cellule dans le panneau latéral, sans quitter la grille ; le panneau laisse la grille utilisable : vous pouvez continuer à faire défiler, filtrer et cliquer sur d'autres lignes tant qu'il est ouvert, puis le fermer avec son bouton de fermeture ; si une section contient des modifications non enregistrées, le panneau demande confirmation avant de les abandonner lorsque vous prévisualisez une autre fiche, fermez le panneau ou quittez la page
 - **Afficher les correspondances** — ne conserver que les lignes dont la valeur est égale à celle de la cellule cliquée
 - **Exclure** — masquer les lignes dont la valeur est égale à celle de la cellule cliquée
 - **Copier la valeur** — copier le texte de la cellule dans le presse-papiers
@@ -325,6 +325,8 @@ Sur chaque feuille de fiches, les colonnes `stakeholder:<clé_de_rôle>` portent
 !!! note "Feuilles exportées avant le passage des clés en camelCase"
     Les clés des rôles de parties prenantes suivent la même convention camelCase que toute autre clé du métamodèle. Une feuille exportée avant ce changement contient des en-têtes comme `stakeholder:technical_application_owner` ; ils s'importent toujours — l'en-tête est associé à son rôle camelCase lorsqu'aucun rôle ne correspond littéralement. Les feuilles nouvellement exportées utilisent la forme camelCase.
 
+
+**Cellules de date de cycle de vie** — les colonnes `lifecycle_<phase>` (`lifecycle_plan`, `lifecycle_phaseIn`, `lifecycle_active`, `lifecycle_phaseOut`, `lifecycle_endOfLife`) suivent la même règle, une date par colonne : **vider une cellule supprime cette date** de la fiche, et omettre complètement la colonne laisse cette date inchangée. Les cellules de valeur simple fonctionnent à l'inverse : une cellule vide de description, de sous-type, d'alias, d'ID externe, de libellé parent ou d'attribut (`attr_<field>`) laisse la valeur enregistrée inchangée ; effacez-les plutôt sur la fiche ou dans la grille de l'inventaire.
 
 ### Feuille `Relations`
 

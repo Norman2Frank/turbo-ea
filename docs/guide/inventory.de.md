@@ -35,7 +35,7 @@ Ein **Badge mit der Anzahl aktiver Filter** zeigt an, wie viele Filter derzeit a
 
 Klicken Sie mit der rechten Maustaste auf eine beliebige Zelle im Raster (langes Drücken auf Touch-Geräten), um ein Kontextmenü mit Schnellaktionen für das zu öffnen, was sich unter dem Mauszeiger befindet, ähnlich wie in ServiceNow:
 
-- **Karte vorschauen** — die Karte, die die Zelle benennt, im Seitenbereich öffnen, ohne das Raster zu verlassen; der Bereich lässt das Raster bedienbar, sodass Sie weiter scrollen, filtern und andere Zeilen anklicken können, solange er geöffnet ist, und ihn über seine Schließen-Schaltfläche schließen
+- **Karte vorschauen** — die Karte, die die Zelle benennt, im Seitenbereich öffnen, ohne das Raster zu verlassen; der Bereich lässt das Raster bedienbar, sodass Sie weiter scrollen, filtern und andere Zeilen anklicken können, solange er geöffnet ist, und ihn über seine Schließen-Schaltfläche schließen; wenn ein Abschnitt nicht gespeicherte Änderungen enthält, fragt der Bereich nach, bevor sie verworfen werden, wenn Sie eine andere Karte vorschauen, den Bereich schließen oder die Seite verlassen
 - **Übereinstimmende anzeigen** — nur die Zeilen behalten, deren Wert dem der angeklickten Zelle entspricht
 - **Herausfiltern** — die Zeilen ausblenden, deren Wert dem der angeklickten Zelle entspricht
 - **Wert kopieren** — den Zellentext in die Zwischenablage kopieren
@@ -325,6 +325,8 @@ Auf jedem Kartenblatt enthalten `stakeholder:<rollen_key>`-Spalten die den Stake
 !!! note "Vor der camelCase-Umstellung exportierte Tabellen"
     Stakeholder-Rollenschlüssel folgen derselben camelCase-Konvention wie alle anderen Metamodell-Schlüssel. Eine zuvor exportierte Tabelle enthält Spalten wie `stakeholder:technical_application_owner`; diese lassen sich weiterhin importieren — der Spaltenkopf wird der camelCase-Rolle zugeordnet, wenn keine Rolle wörtlich passt. Neu exportierte Tabellen verwenden die camelCase-Form.
 
+
+**Lebenszyklus-Datumszellen** — die Spalten `lifecycle_<phase>` (`lifecycle_plan`, `lifecycle_phaseIn`, `lifecycle_active`, `lifecycle_phaseOut`, `lifecycle_endOfLife`) folgen derselben Regel, ein Datum pro Spalte: **Eine leere Zelle entfernt dieses Datum** von der Karte, und wird die Spalte ganz weggelassen, bleibt das Datum unverändert. Bei einfachen Wertzellen ist es umgekehrt: Eine leere Zelle bei Beschreibung, Untertyp, Alias, externer ID, Eltern-Label oder Attribut (`attr_<field>`) lässt den gespeicherten Wert unverändert; löschen Sie diese stattdessen auf der Karte oder im Inventar-Raster.
 
 ### `Relations`-Blatt
 

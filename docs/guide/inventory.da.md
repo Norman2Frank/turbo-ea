@@ -35,7 +35,7 @@ Et **aktivt-filter-tæller**-badge viser, hvor mange filtre der aktuelt er anven
 
 Højreklik på en vilkårlig celle i tabellen (langt tryk på berøringsenheder) for at åbne en kontekstmenu med hurtige handlinger på det, der er under markøren, i stil med ServiceNow:
 
-- **Forhåndsvis kort** — åbn det kort, cellen peger på, i sidepanelet uden at forlade tabellen; panelet lader tabellen forblive brugbar, så du kan blive ved med at rulle, filtrere og klikke på andre rækker, mens det er åbent, og lukke det med dets lukkeknap
+- **Forhåndsvis kort** — åbn det kort, cellen peger på, i sidepanelet uden at forlade tabellen; panelet lader tabellen forblive brugbar, så du kan blive ved med at rulle, filtrere og klikke på andre rækker, mens det er åbent, og lukke det med dets lukkeknap; hvis et afsnit indeholder ændringer, du ikke har gemt, spørger panelet, før de kasseres, når du forhåndsviser et andet kort, lukker panelet eller forlader siden
 - **Vis matchende** — behold kun de rækker, hvis værdi svarer til den valgte celles
 - **Filtrér fra** — skjul de rækker, hvis værdi svarer til den valgte celles
 - **Kopiér værdi** — kopiér cellens tekst til udklipsholderen
@@ -342,6 +342,8 @@ På hvert kort-ark bærer `stakeholder:<role_key>`-kolonner de brugere, der er t
 !!! note "Ark eksporteret før rollenøgler blev camelCase"
     Interessentrollenøgler følger samme camelCase-konvention som alle andre metamodelnøgler. Et ark eksporteret før den ændring har kolonneoverskrifter som `stakeholder:technical_application_owner`; de kan stadig importeres — overskriften matches til sin camelCase-rolle, når ingen rolle matcher bogstaveligt. Nyeksporterede ark bruger camelCase-formen.
 
+
+**Livscyklus-datoceller** — kolonnerne `lifecycle_<phase>` (`lifecycle_plan`, `lifecycle_phaseIn`, `lifecycle_active`, `lifecycle_phaseOut`, `lifecycle_endOfLife`) følger samme regel, én dato pr. kolonne: **at tømme en celle fjerner datoen** fra kortet, og udelades kolonnen helt, forbliver datoen uændret. Almindelige værdiceller virker omvendt: en tom celle for beskrivelse, undertype, alias, eksternt ID, overordnet label eller attribut (`attr_<field>`) lader den gemte værdi stå uændret; ryd dem i stedet på kortet eller i Inventar-gitteret.
 
 ### Relations-ark
 

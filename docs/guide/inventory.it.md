@@ -35,7 +35,7 @@ Un **badge con il conteggio dei filtri attivi** mostra quanti filtri sono attual
 
 Fai clic con il tasto destro su una cella qualsiasi della griglia (pressione prolungata sui dispositivi touch) per aprire un menu contestuale con azioni rapide su ciò che si trova sotto il cursore, in stile ServiceNow:
 
-- **Anteprima scheda** — apre la scheda indicata dalla cella nel pannello laterale, senza uscire dalla griglia; il pannello lascia la griglia utilizzabile, così potete continuare a scorrere, filtrare e cliccare altre righe mentre è aperto, e chiuderlo con il suo pulsante di chiusura
+- **Anteprima scheda** — apre la scheda indicata dalla cella nel pannello laterale, senza uscire dalla griglia; il pannello lascia la griglia utilizzabile, così potete continuare a scorrere, filtrare e cliccare altre righe mentre è aperto, e chiuderlo con il suo pulsante di chiusura; se una sezione contiene modifiche non salvate, il pannello chiede conferma prima di scartarle quando visualizzate l'anteprima di un'altra scheda, chiudete il pannello o lasciate la pagina
 - **Mostra corrispondenze** — mantiene solo le righe il cui valore corrisponde a quello della cella selezionata
 - **Escludi** — nasconde le righe il cui valore corrisponde a quello della cella selezionata
 - **Copia valore** — copia il testo della cella negli appunti
@@ -325,6 +325,8 @@ Su ogni foglio di schede, le colonne `stakeholder:<chiave_ruolo>` contengono gli
 !!! note "Fogli esportati prima del passaggio a chiavi camelCase"
     Le chiavi dei ruoli stakeholder seguono la stessa convenzione camelCase di ogni altra chiave del metamodello. Un foglio esportato prima di quel cambiamento contiene intestazioni come `stakeholder:technical_application_owner`; vengono comunque importate — l'intestazione viene associata al ruolo camelCase quando nessun ruolo corrisponde letteralmente. I fogli esportati ora usano la forma camelCase.
 
+
+**Celle di data del ciclo di vita** — le colonne `lifecycle_<phase>` (`lifecycle_plan`, `lifecycle_phaseIn`, `lifecycle_active`, `lifecycle_phaseOut`, `lifecycle_endOfLife`) seguono la stessa regola, una data per colonna: **svuotare una cella rimuove quella data** dalla scheda, e omettere del tutto la colonna lascia la data invariata. Le celle di valore semplice funzionano al contrario: una cella vuota di descrizione, sottotipo, alias, ID esterno, etichetta del genitore o attributo (`attr_<field>`) lascia invariato il valore memorizzato; cancellali invece sulla scheda o nella griglia dell'Inventario.
 
 ### Foglio `Relations`
 

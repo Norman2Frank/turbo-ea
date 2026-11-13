@@ -5,6 +5,37 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.203.3] - 2026-11-13
+
+### Fixed
+- The card preview panel asks before discarding unsaved edits when you preview another card, close the panel or leave the page ([#1397](https://github.com/vincentmakes/turbo-ea/issues/1397)).
+
+## [2.203.2] - 2026-11-12
+
+### Fixed
+- The Cost report counts an Initiative's Budget and Actual Cost for the current fiscal year only — its PPM budget lines for that year and its cost lines dated in it — instead of the total across all years, and dashboard tiles summing an Initiative's Budget or Actual Cost now show the year's figure too ([#1362](https://github.com/vincentmakes/turbo-ea/discussions/1362)).
+- The Cost report's help icons open on a tap, so they work on an iPad and other touch screens, and tapping a note beside a card's name shows the note instead of opening the card.
+- With the PPM module on, the Cost report marks an Initiative whose Budget or Actual Cost is a figure typed on the card (it has no PPM lines) and therefore counts in full; a calculated figure is taken as it is.
+- With the PPM module on, the Cost report labels an Initiative's Budget and Actual Cost "(PPM)" where a cost field or cost source is picked.
+- Dashboard trends of tiles summing or averaging an Initiative's Budget or Actual Cost restart once, instead of showing a drop that never happened.
+
+## [2.203.1] - 2026-11-12
+
+### Fixed
+- Excel import clears a lifecycle date whose cell was emptied, even when the row is left with no lifecycle date at all, and leaves a date untouched when the sheet omits its `lifecycle_` column instead of clearing it ([#1393](https://github.com/vincentmakes/turbo-ea/issues/1393)).
+
+## [2.203.0] - 2026-11-12
+
+### Added
+- **MCP step links on process flows**: two new tools let an AI assistant read the steps of a draft process flow with their linked cards (`get_process_flow_elements`) and link them to Applications, Data Objects, IT Components, Organizations and called Business Processes (`link_process_flow_elements`), with the usual dry-run preview ([#1390](https://github.com/vincentmakes/turbo-ea/discussions/1390)).
+
+### Changed
+- MCP tools refuse an argument they do not take, naming it and listing the valid ones, instead of silently ignoring it.
+
+### Fixed
+- Links returned by MCP tools open the address the instance is reached at when `MCP_PUBLIC_URL` names it and `TURBO_EA_PUBLIC_URL` is unset or left at a local address such as the `http://localhost` that `.env.example` ships, instead of pointing at localhost.
+- Linking a step of a draft process flow refuses a card of the wrong type for that link (an IT Component as the step's Application, for example), a value that is not a card id, and an archived card, instead of storing them; such a link could make approving the draft fail. A draft that already links a card archived since stays editable and approvable.
+
 ## [2.202.0] - 2026-11-12
 
 ### Changed

@@ -35,7 +35,7 @@ Un **contador de filtros activos** muestra cuántos filtros están aplicados act
 
 Haga clic derecho en cualquier celda de la cuadrícula (pulsación larga en dispositivos táctiles) para abrir un menú contextual con acciones rápidas sobre lo que hay bajo el cursor, al estilo de ServiceNow:
 
-- **Vista previa de la ficha** — abrir la ficha que nombra la celda en el panel lateral, sin salir de la cuadrícula; el panel deja la cuadrícula utilizable, de modo que puede seguir desplazándose, filtrando y haciendo clic en otras filas mientras está abierto, y cerrarlo con su botón de cierre
+- **Vista previa de la ficha** — abrir la ficha que nombra la celda en el panel lateral, sin salir de la cuadrícula; el panel deja la cuadrícula utilizable, de modo que puede seguir desplazándose, filtrando y haciendo clic en otras filas mientras está abierto, y cerrarlo con su botón de cierre; si una sección contiene cambios sin guardar, el panel pregunta antes de descartarlos cuando previsualiza otra ficha, cierra el panel o abandona la página
 - **Mostrar coincidencias** — conservar solo las filas cuyo valor coincide con el de la celda pulsada
 - **Excluir** — ocultar las filas cuyo valor coincide con el de la celda pulsada
 - **Copiar valor** — copiar el texto de la celda al portapapeles
@@ -325,6 +325,8 @@ En cada hoja de fichas, las columnas `stakeholder:<clave_de_rol>` llevan los usu
 !!! note "Hojas exportadas antes de que las claves fueran camelCase"
     Las claves de los roles de partes interesadas siguen la misma convención camelCase que cualquier otra clave del metamodelo. Una hoja exportada antes de ese cambio contiene encabezados como `stakeholder:technical_application_owner`; siguen importándose — el encabezado se asocia a su rol en camelCase cuando ningún rol coincide literalmente. Las hojas nuevas usan la forma camelCase.
 
+
+**Celdas de fecha de ciclo de vida** — las columnas `lifecycle_<phase>` (`lifecycle_plan`, `lifecycle_phaseIn`, `lifecycle_active`, `lifecycle_phaseOut`, `lifecycle_endOfLife`) siguen la misma regla, una fecha por columna: **vaciar una celda elimina esa fecha** de la ficha, y omitir la columna por completo deja esa fecha sin cambios. Las celdas de valor simple funcionan al revés: una celda vacía de descripción, subtipo, alias, ID externo, etiqueta del padre o atributo (`attr_<field>`) deja el valor almacenado sin cambios; bórrelos en la ficha o en la cuadrícula del Inventario.
 
 ### Hoja `Relations`
 

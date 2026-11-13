@@ -35,7 +35,7 @@ Um **contador de filtros ativos** mostra quantos filtros estão atualmente aplic
 
 Clique com o botão direito em qualquer célula da grelha (toque longo em dispositivos táteis) para abrir um menu de contexto com ações rápidas sobre o que está sob o cursor, ao estilo do ServiceNow:
 
-- **Pré-visualizar ficha** — abrir a ficha que a célula indica no painel lateral, sem sair da grelha; o painel deixa a grelha utilizável, pelo que pode continuar a deslocar-se, filtrar e clicar noutras linhas enquanto está aberto, e fechá-lo com o respetivo botão de fechar
+- **Pré-visualizar ficha** — abrir a ficha que a célula indica no painel lateral, sem sair da grelha; o painel deixa a grelha utilizável, pelo que pode continuar a deslocar-se, filtrar e clicar noutras linhas enquanto está aberto, e fechá-lo com o respetivo botão de fechar; se uma secção tiver alterações não guardadas, o painel pergunta antes de as descartar quando pré-visualiza outra ficha, fecha o painel ou sai da página
 - **Mostrar correspondências** — manter apenas as linhas cujo valor é igual ao da célula clicada
 - **Excluir** — ocultar as linhas cujo valor é igual ao da célula clicada
 - **Copiar valor** — copiar o texto da célula para a área de transferência
@@ -325,6 +325,8 @@ Em cada planilha de fichas, as colunas `stakeholder:<chave_do_papel>` carregam o
 !!! note "Folhas exportadas antes de as chaves passarem a camelCase"
     As chaves dos papéis de partes interessadas seguem a mesma convenção camelCase de qualquer outra chave do metamodelo. Uma folha exportada antes dessa mudança contém cabeçalhos como `stakeholder:technical_application_owner`; continuam a ser importados — o cabeçalho é associado ao papel em camelCase quando nenhum papel corresponde literalmente. As folhas novas usam a forma camelCase.
 
+
+**Células de data do ciclo de vida** — as colunas `lifecycle_<phase>` (`lifecycle_plan`, `lifecycle_phaseIn`, `lifecycle_active`, `lifecycle_phaseOut`, `lifecycle_endOfLife`) seguem a mesma regra, uma data por coluna: **esvaziar uma célula remove essa data** do cartão, e omitir a coluna por completo deixa essa data inalterada. As células de valor simples funcionam ao contrário: uma célula vazia de descrição, subtipo, alias, ID externo, rótulo do pai ou atributo (`attr_<field>`) deixa o valor armazenado inalterado; limpe-os no cartão ou na grelha do Inventário.
 
 ### Planilha `Relations`
 

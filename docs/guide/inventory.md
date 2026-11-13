@@ -35,7 +35,7 @@ An **active filter count** badge shows how many filters are currently applied.
 
 Right-click any cell in the grid (long-press on a touch device) to open a context menu of quick actions on whatever is under the cursor, similar to ServiceNow:
 
-- **Preview card** — open the card the cell names in the side panel, without leaving the grid; the panel leaves the grid usable, so you can keep scrolling, filtering and clicking other rows while it is open, and close it with its close button
+- **Preview card** — open the card the cell names in the side panel, without leaving the grid; the panel leaves the grid usable, so you can keep scrolling, filtering and clicking other rows while it is open, and close it with its close button; if a section holds edits you have not saved, the panel asks before discarding them when you preview another card, close the panel or leave the page
 - **Show matching** — keep only the rows whose value equals the clicked cell's
 - **Filter out** — hide the rows whose value equals the clicked cell's
 - **Copy value** — copy the cell text to the clipboard
@@ -353,6 +353,8 @@ stakeholder:observer     →  carol@corp.com
 The **email address is the only accepted user reference** — display names can collide, so they are never used for matching. A `Name <email>` entry is tolerated in hand-authored files (the bracketed email is used); a bare display name produces a warning and is skipped.
 
 Like relation cells, stakeholder cells are **declarative per role**: the users listed in the cell become the complete assignment set for that role after import. Removing a user from the list unassigns them; emptying the cell clears the role; omitting the column entirely leaves that role's assignments untouched. Entries that don't match any user produce a warning and are skipped — they never block the import.
+
+**Lifecycle date cells** — the `lifecycle_<phase>` columns (`lifecycle_plan`, `lifecycle_phaseIn`, `lifecycle_active`, `lifecycle_phaseOut`, `lifecycle_endOfLife`) follow the same rule, one date per column: **emptying a cell removes that date** from the card, and omitting the column entirely leaves that date untouched. Plain value cells work the other way round: an empty description, subtype, alias, external ID, parent label or attribute (`attr_<field>`) cell leaves the stored value unchanged; clear those on the card or in the Inventory grid instead.
 
 ### Relations sheet
 
