@@ -5,6 +5,27 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.212.0] - 2026-11-23
+
+### Added
+- AI description suggestions are written in the language you use Turbo EA in.
+
+### Fixed
+- Applying an AI suggestion saves the description even when a suggested Hosting Type or other value no longer exists on the card type, and a save that fails is now shown instead of doing nothing.
+
+### Security
+- The translation library (i18next) is updated to a version that fixes a denial-of-service advisory (GHSA-6jcc-5g8w-32mx); Turbo EA did not use the affected function.
+
+## [2.211.0] - 2026-11-23
+
+### Added
+- The Layered Dependency View's filter menu lists relation types below card types: untick a relation type to take its lines off the view, along with the cards only those lines kept on it.
+- A card comment can be deleted from the Comments tab by its author and by anyone allowed to manage comments; its replies, its in-app notifications and its text in the history go with it, and the history records the deletion.
+
+### Fixed
+- Editing, deleting or posting a comment on a card you cannot see, or with a malformed id, now answers "not found" instead of an error or a refusal that confirmed the comment exists; a reply can no longer be attached to a comment on another card.
+- A card whose comments hold a reply thread four or more levels deep lists its comments again instead of showing none.
+
 ## [2.210.0] - 2026-11-22
 
 ### Added
