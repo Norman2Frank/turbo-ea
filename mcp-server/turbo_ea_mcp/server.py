@@ -43,12 +43,14 @@ from turbo_ea_mcp.config import (
     MCP_MAX_CARDS_PER_CALL,
     MCP_MAX_LOGOS_PER_CALL,
     MCP_MAX_RELATIONS_PER_CALL,
+    MCP_MAX_TRANSLATIONS_PER_CALL,
     MCP_PORT,
     MCP_PUBLIC_URL,
     MCP_REQUIRE_DRYRUN_FIRST,
     MCP_WRITES_ENABLED,
     TURBO_EA_PUBLIC_URL,
 )
+from turbo_ea_mcp.hash_memory import MEMORY as _HASH_MEMORY
 from turbo_ea_mcp.logo_fetch import LogoFetchError, allowed_hosts, fetch_logo_cached
 from turbo_ea_mcp.models import CardLogoItem
 from turbo_ea_mcp.text_render import html_to_text
@@ -230,7 +232,11 @@ mcp = _StrictFastMCP(
 
         Write tools default to dry_run=True: they validate and return a
         preview without persisting. Surface the preview to the user, then
-        call again with dry_run=False to commit. Always call list_card_types
+        call again with dry_run=False to commit. One exception:
+        submit_translations saves on the first call (no preview needed),
+        because every string is validated on its own and a language is
+        thousands of strings; to fill a whole language at once, use
+        start_ai_translation instead. Always call list_card_types
         and get_relation_types first to make sure the data you propose fits
         the existing metamodel — the backend will reject unknown types and
         invalid source/target combinations.
@@ -7728,6 +7734,638 @@ async def call_extension_write(
                 "note": _EXTENSION_NOT_REVERSIBLE,
             }
         )
+
+
+# ── Custom languages ────────────────────────────────────────────────────────
+#
+# A custom language is data: an admin adds it in Settings and fills its UI
+# strings from a file, the AI provider or these tools. The backend validates
+# every submitted value per key (placeholders, tags, $t() references, URLs,
+# length) — that validator is the one gate, so the tools only check shape.
+
+_LOCALE_CODE_RE = re.compile(r"[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2})?")
+# The pattern allows 11 characters (``abc-Abcd-AB``); the column holds 10.
+_LOCALE_CODE_MAX = 10
+_UNTRANSLATED_LIMIT_MAX = 500
+_TRANSLATIONS_NOT_REVERSIBLE = (
+    "Translations are language data, not card changes, so rollback_batch cannot "
+    "undo them; correct a string in Admin → Settings → Custom Languages."
+)
+
+
+def _locale_problem(locale: object) -> dict | None:
+    """Refuse a language code the backend could never hold, before any call."""
+    if (
+        isinstance(locale, str)
+        and len(locale) <= _LOCALE_CODE_MAX
+        and _LOCALE_CODE_RE.fullmatch(locale)
+    ):
+        return None
+    return {
+        "error": "invalid_locale",
+        "message": (
+            "locale must be a custom language code such as 'nl', 'pt-BR' or "
+            "'zh-Hant', at most 10 characters (see list_custom_languages)."
+        ),
+        "locale": locale,
+    }
+
+
+def _locale_path(locale: str, tail: str = "") -> str:
+    return f"/custom-locales/{quote(locale, safe='')}{tail}"
+
+
+def _translation_instructions(language: str) -> str:
+    """What the export file tells a translator, for this language."""
+    return (
+        f'Translate every value under "strings" from English into {language}. '
+        "Keep the keys, the {{placeholders}}, any <tags> and $t(...) references "
+        "exactly as they are, and add no markup or links of your own. Keep product "
+        "terms (card, inventory, stakeholder, metamodel, relation, lifecycle) "
+        'consistent with the earlier translations. The "metamodel" namespace holds '
+        "the names of card types, fields, options and relations: short labels, "
+        "translate them first and use the same words for them in every other "
+        "string. Leave out a string you cannot translate rather than returning "
+        "the English text."
+    )
+
+
+def _custom_locale_refusal(exc: httpx.HTTPStatusError, error: str) -> dict:
+    refused = {"error": error, **_refusal(exc)}
+    refused.pop("status")
+    if refused["detail"] is None and exc.response.status_code == 429:
+        # The rate limiter answers without a ``detail``.
+        refused["detail"] = "rate_limited"
+    return refused
+
+
+@mcp.tool(annotations=_READ_ANNOT)
+async def list_custom_languages() -> str:
+    """List the custom languages an admin added to this Turbo EA.
+
+    Each entry has its ``code`` (what the other custom-language tools take),
+    native ``name``, ``english_name``, ``rtl``, ``enabled`` (offered to users
+    or not), ``stats`` (``total``, ``translated``, ``missing``, ``stale``) and
+    the AI translation ``job`` if one ran. ``missing`` strings have no
+    translation; ``stale`` ones were translated from English text that has
+    since changed. Requires ``admin.settings``.
+    """
+    token = await _get_current_token()
+    if not token:
+        return "Error: Not authenticated. Please reconnect."
+    try:
+        data = await TurboEAClient(token).get("/custom-locales")
+    except httpx.HTTPStatusError as exc:
+        return _fmt(_custom_locale_refusal(exc, "custom_locales_refused"))
+    return _fmt(data)
+
+
+@mcp.tool(annotations=_READ_ANNOT)
+async def get_untranslated_strings(
+    locale: str,
+    namespace: str = "",
+    limit: int = 100,
+    include_stale: bool = True,
+    offset: int = 0,
+    include_source_hashes: bool = False,
+    collapse_identical: bool = True,
+) -> str:
+    """Get English UI strings a custom language still needs, to translate them.
+
+    Translate each value of ``strings`` into ``language`` following
+    ``instructions``, then send them back with ``submit_translations`` in the
+    same ``{namespace: {key: text}}`` shape — the whole page in one call.
+    ``remaining`` says how many more are waiting after this page.
+
+    The loop: fetch a page (up to 500 strings), submit it in one call, then
+    call this again with ``offset=0``.
+
+    Identical English text is listed once (``collapse_identical``, default
+    True): "High" or "Not started" may sit under dozens of keys, and one key
+    stands for all of them — ``identical`` says how many keys a text stands for
+    when more than one (keys already holding an older translation included).
+    ``submit_translations`` then gives that translation to every key with the
+    same English that has no translation at all. The server remembers which English
+    text each string was taken from and attaches it when you submit, so you
+    do not send it back yourself.
+
+    To translate a whole language in one step instead, use
+    ``start_ai_translation`` (the server-side job on the configured AI
+    provider).
+
+    Paging: a string that is accepted leaves this list, so after submitting
+    call again with ``offset=0``. ``offset`` is the number of strings you are
+    skipping — the ones you left out or that were rejected — not a page
+    number; ``next_offset`` (present while more remain) is this call's
+    ``offset`` plus the strings returned, for when you submitted none of them.
+
+    The ``metamodel`` namespace holds the names of card types, fields, options
+    and relations (keys such as ``type.Application.label``). They are short
+    labels the rest of the UI refers to: translate that namespace first, then
+    use the same words for them in the UI strings.
+
+    Args:
+        locale: The custom language code (from ``list_custom_languages``).
+        namespace: Only this area (e.g. "metamodel", "common", "admin");
+            empty = all.
+        limit: Strings per page, 1 to 500 (default 100).
+        include_stale: Also return strings whose English text changed since
+            they were translated (default True); False = missing ones only.
+        offset: Strings to skip from the start of the list (default 0).
+        include_source_hashes: Also return ``source_hashes`` (default False:
+            the server remembers them for ``submit_translations``). For a
+            client that submits through another server process, which does
+            not share this one's memory.
+        collapse_identical: List each English text once (default True);
+            ``returned``, ``remaining`` and ``offset`` then count texts.
+
+    Returns: JSON with ``locale``, ``language`` (English name), ``native_name``,
+    ``rtl``, ``instructions``, ``strings``, ``returned``, ``remaining``,
+    ``next_offset`` while more remain, for stale strings the old wording
+    under ``previous_translations``, ``identical`` (``{namespace: {key: n}}``
+    for a text standing for n > 1 keys) and, when asked, ``source_hashes``.
+    Requires ``admin.settings``.
+    """
+    token = await _get_current_token()
+    if not token:
+        return "Error: Not authenticated. Please reconnect."
+    if (problem := _locale_problem(locale)) is not None:
+        return _fmt(problem)
+    offset = max(offset, 0)
+    params = _compact(
+        {
+            "status": "untranslated" if include_stale else "missing",
+            "namespace": namespace,
+            "limit": max(1, min(limit, _UNTRANSLATED_LIMIT_MAX)),
+            "offset": offset,
+            "collapse": "true" if collapse_identical else None,
+        }
+    )
+    client = TurboEAClient(token)
+    try:
+        detail = await client.get(_locale_path(locale))
+        page = await client.get(_locale_path(locale, "/strings"), params=params)
+    except httpx.HTTPStatusError as exc:
+        return _fmt(_custom_locale_refusal(exc, "custom_locale_refused"))
+    info = detail if isinstance(detail, dict) else {}
+    body = page if isinstance(page, dict) else {}
+    items = [item for item in body.get("items") or [] if isinstance(item, dict)]
+    strings: dict[str, dict] = {}
+    hashes: dict[str, dict] = {}
+    previous: dict[str, dict] = {}
+    identical: dict[str, dict] = {}
+    for item in items:
+        namespace_key, key = item.get("namespace"), item.get("key")
+        strings.setdefault(namespace_key, {})[key] = item.get("source")
+        same = item.get("same_text")
+        if isinstance(same, int) and same > 1:
+            identical.setdefault(namespace_key, {})[key] = same
+        if isinstance(item.get("source_hash"), str):
+            hashes.setdefault(namespace_key, {})[key] = item["source_hash"]
+        if item.get("status") == "stale" and item.get("value"):
+            previous.setdefault(namespace_key, {})[key] = item["value"]
+    total = body.get("total")
+    if not isinstance(total, int):
+        total = len(items)
+    language = info.get("english_name") or locale
+    _HASH_MEMORY.remember(token, locale, hashes)
+    out = {
+        "locale": locale,
+        "language": language,
+        "native_name": info.get("name"),
+        "rtl": info.get("rtl") is True,
+        "instructions": _translation_instructions(language),
+        "strings": strings,
+        "returned": len(items),
+        "remaining": max(total - offset - len(items), 0),
+    }
+    if out["remaining"] > 0:
+        out["next_offset"] = offset + len(items)
+    if previous:
+        out["previous_translations"] = previous
+    if identical:
+        out["identical"] = identical
+    if include_source_hashes:
+        out["source_hashes"] = hashes
+    return _fmt(out)
+
+
+def _translation_count(translations: object) -> tuple[int, dict | None]:
+    """The number of strings in ``{namespace: {key: text}}``, or why the shape
+    is refused. Values must be text: clearing a string is done in the web app."""
+    if not isinstance(translations, dict) or not translations:
+        return 0, {
+            "error": "no_translations",
+            "message": "translations must be a non-empty {namespace: {key: text}} object.",
+        }
+    count = 0
+    for namespace, keys in translations.items():
+        if not isinstance(keys, dict) or not keys:
+            return 0, {
+                "error": "invalid_translations",
+                "message": "Each namespace must map one or more keys to their translation.",
+                "namespace": namespace,
+            }
+        for key, value in keys.items():
+            if not isinstance(value, str):
+                return 0, {
+                    "error": "invalid_translations",
+                    "message": (
+                        "Each translation must be text. To clear a translation, use the web app."
+                    ),
+                    "namespace": namespace,
+                    "key": key,
+                }
+            count += 1
+    return count, None
+
+
+def _refused_keys(body: dict) -> set[tuple[object, object]]:
+    """``(namespace, key)`` of every row the backend rejected or did not know.
+
+    The backend names unknown keys in ``unknown_keys`` (at most 200; the
+    ``unknown`` count stays exact); an older ``unknown`` list is honoured."""
+    refused = set()
+    for field in ("rejected", "unknown_keys", "unknown"):
+        entries = body.get(field)
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict):
+                refused.add((entry.get("namespace"), entry.get("key")))
+    return refused
+
+
+def _accepted_counts(translations: dict, body: dict) -> dict[str, int]:
+    """Per namespace, how many submitted keys the backend took (applied or
+    unchanged). Counts, not the keys: echoing thousands of keys back costs the
+    assistant tokens and tells it nothing ``rejected`` / ``unknown_keys`` do
+    not."""
+    refused = _refused_keys(body)
+    accepted = {
+        namespace: sum(1 for key in keys if (namespace, key) not in refused)
+        for namespace, keys in translations.items()
+    }
+    return {namespace: count for namespace, count in accepted.items() if count}
+
+
+def _outdated_backend(exc: httpx.HTTPStatusError) -> dict | None:
+    """A backend older than this server still asks ``submit_translations`` for
+    a confirm token: say so plainly instead of retrying."""
+    detail = _detail(exc)
+    if exc.response.status_code == 400 and str(detail).startswith("confirm_token_required"):
+        return {
+            "error": "backend_needs_update",
+            "message": (
+                "This Turbo EA backend still asks for a preview before large "
+                "translation submits. Update the backend to the version of this "
+                "MCP server, or submit at most 20 strings per call until then."
+            ),
+        }
+    return None
+
+
+@mcp.tool(annotations=_WRITE_ADDITIVE_ANNOT)
+async def submit_translations(
+    locale: str,
+    translations: dict,
+    source_hashes: dict | None = None,
+    dry_run: bool = False,
+    fill_identical: bool = True,
+) -> str:
+    """Save translated strings into a custom language — on the first call.
+
+    Unlike the other write tools this one needs no preview: every string is
+    checked on its own and only a valid one is stored, so submit a whole page
+    of ``get_untranslated_strings`` at once and move on.
+
+    ``translations`` is ``{namespace: {key: translated text}}`` — the keys and
+    namespaces ``get_untranslated_strings`` returned. Each string is checked
+    on its own: it must be a known key, keep every ``{{placeholder}}`` and
+    ``$t(...)`` reference of the English text, add no tag or link the English
+    does not have and stay a sensible length. A rejected string is reported
+    with its reason and never blocks the others; it stays untranslated.
+    ``metamodel`` keys (card-type, field, option and relation names) are
+    submitted the same way, as one more namespace.
+
+    Requires ``admin.settings``. NOT reversible by ``rollback_batch``:
+    translations are language data, not card changes — a wrong string is
+    corrected in Admin → Settings → Custom Languages (or by submitting it
+    again).
+
+    Args:
+        locale: The custom language code (from ``list_custom_languages``).
+        translations: The strings, at most ``MCP_MAX_TRANSLATIONS_PER_CALL``
+            (default 2000).
+        source_hashes: Leave it out: the server attaches the hashes
+            ``get_untranslated_strings`` handed out, so a ``metamodel`` name
+            renamed since you read it is skipped as ``source_changed``
+            instead of landing on the new name. Passed explicitly
+            (``{namespace: {key: hash}}``), they are used as given.
+        dry_run: True only to check strings without storing them (default
+            False: the call saves).
+        fill_identical: Give each accepted translation to every other key of
+            the language whose English is the same text and that has no
+            translation yet (default True) — one translation of "High" fills
+            all of them; a key already translated is never changed. Set False
+            when the same English needs different words in different places.
+            A wrong fill is corrected in Admin → Settings → Custom Languages.
+
+    Returns: JSON with ``applied`` (``would_apply`` on a dry run),
+    ``unchanged``, ``rejected[]`` (``namespace``, ``key``, ``reason``),
+    ``unknown`` (the number of keys the backend did not recognise),
+    ``unknown_keys`` (the first 200 of them), ``accepted`` (per namespace,
+    how many strings were taken), ``filled`` (other keys given one of these
+    translations; ``would_fill`` on a dry run) and ``fill_rejected``,
+    ``dry_run`` and ``batch_id``.
+    """
+    token = await _get_current_token()
+    if not token:
+        return "Error: Not authenticated. Please reconnect."
+    if (disabled := _writes_disabled_message()) is not None:
+        return disabled
+    if (problem := _locale_problem(locale)) is not None:
+        return _fmt(problem)
+    rows, problem = _translation_count(translations)
+    if problem is not None:
+        return _fmt(problem)
+    if rows > MCP_MAX_TRANSLATIONS_PER_CALL:
+        return _fmt(
+            {
+                "error": "batch_too_large",
+                "message": (
+                    f"This call has {rows} strings but the MCP per-call cap "
+                    f"is {MCP_MAX_TRANSLATIONS_PER_CALL}. Submit them in smaller calls."
+                ),
+                "cap": MCP_MAX_TRANSLATIONS_PER_CALL,
+                "received": rows,
+            }
+        )
+    if source_hashes is None:
+        source_hashes = _HASH_MEMORY.recall(token, locale, translations) or None
+    try:
+        return await _submit_translations(
+            locale, translations, source_hashes, rows, dry_run, token, fill_identical
+        )
+    except httpx.HTTPStatusError as exc:
+        # Raised by the batch's open or close (a write's refusal is answered
+        # inside); only an open can ask for a token, before anything is written.
+        if (outdated := _outdated_backend(exc)) is not None:
+            return _fmt(outdated)
+        raise
+
+
+async def _submit_translations(
+    locale: str,
+    translations: dict,
+    source_hashes: dict | None,
+    rows: int,
+    dry_run: bool,
+    token: str,
+    fill_identical: bool,
+) -> str:
+    """The batch and the write of ``submit_translations`` (its checks done)."""
+    async with mutation_batch(
+        token, tool_name="submit_translations", row_count=rows, dry_run=dry_run
+    ) as batch:
+        fields = {"batch_id": batch.batch_id}
+        try:
+            data = await batch.client().post(
+                _locale_path(locale, f"/strings?dry_run={_bool_param(dry_run)}"),
+                json=_compact(
+                    {
+                        "strings": translations,
+                        "source_hashes": source_hashes,
+                        "origin": "mcp",
+                        "fill_identical": True if fill_identical else None,
+                    }
+                ),
+            )
+        except httpx.HTTPStatusError as exc:
+            batch.summary = {"rows": rows, "status": "refused"}
+            return _fmt({**_custom_locale_refusal(exc, "submit_translations_refused"), **fields})
+        body = data if isinstance(data, dict) else {}
+        rejected = [row for row in body.get("rejected") or [] if isinstance(row, dict)]
+        applied_key = "would_apply" if dry_run else "applied"
+        batch.summary = {
+            "rows": rows,
+            applied_key: body.get("applied", 0),
+            "rejected": len(rejected),
+        }
+        return _fmt(
+            {
+                "dry_run": dry_run,
+                "locale": locale,
+                "submitted": rows,
+                applied_key: body.get("applied", 0),
+                "unchanged": body.get("unchanged", 0),
+                "rejected": rejected,
+                "unknown": body.get("unknown"),
+                "unknown_keys": body.get("unknown_keys") or [],
+                "accepted": _accepted_counts(translations, body),
+                ("would_fill" if dry_run else "filled"): body.get("filled", 0),
+                "fill_rejected": body.get("fill_rejected", 0),
+                "reversible": False,
+                "note": _TRANSLATIONS_NOT_REVERSIBLE,
+                **fields,
+            }
+        )
+
+
+_AI_TRANSLATION_MODES = ("missing", "all")
+
+
+def _ai_translation_count(detail: object, mode: str) -> int | None:
+    """How many strings the AI job would send: new and changed ones, or all."""
+    stats = detail.get("stats") if isinstance(detail, dict) else None
+    if not isinstance(stats, dict):
+        return None
+    if mode == "all":
+        total = stats.get("total")
+        return total if isinstance(total, int) else None
+    missing, stale = stats.get("missing"), stats.get("stale")
+    if isinstance(missing, int) and isinstance(stale, int):
+        return missing + stale
+    return None
+
+
+def _job_running(detail: object) -> bool:
+    job = detail.get("job") if isinstance(detail, dict) else None
+    return isinstance(job, dict) and job.get("status") == "running"
+
+
+@mcp.tool(annotations=_WRITE_DESTRUCTIVE_ANNOT)
+async def start_ai_translation(
+    locale: str,
+    mode: str = "missing",
+    include_manual: bool = False,
+    dry_run: bool = True,
+    confirm_token: str = "",
+) -> str:
+    """Translate a whole custom language with the server's AI translation job.
+
+    One call instead of many ``submit_translations``: the Turbo EA server sends
+    the strings to the AI provider configured in its Settings (not to you),
+    checks every answer with the same rules as any other translation and
+    stores the valid ones. It runs in the background; read its progress
+    (``job``: ``status``, ``done``, ``total``, ``failed``) with
+    ``list_custom_languages``, and stop it with ``stop_ai_translation``.
+
+    It spends the configured provider's budget (and with ``mode="all"`` and
+    ``include_manual`` replaces strings corrected by hand), so it previews
+    first: the dry run reports how many strings would be sent and starts
+    nothing. Above the confirmation threshold (counted in strings) the
+    commit must pass back the dry run's ``confirm_token``.
+
+    Args:
+        locale: The custom language code (from ``list_custom_languages``).
+        mode: "missing" (default) — new strings and those whose English
+            changed; "all" — every string again.
+        include_manual: With mode "all", also replace strings an admin
+            corrected by hand (default False).
+        dry_run: When True (default), report what would be sent; False starts
+            the job.
+        confirm_token: For a commit above the confirmation threshold, the
+            token the dry run returned.
+
+    The ``confirm_token`` is bound to the language, ``mode`` and
+    ``include_manual`` of the preview that issued it: a start with other
+    arguments is refused, so run the preview again.
+
+    Returns: JSON with ``strings`` (an estimate on the preview: with mode
+    "all", strings corrected by hand that the job skips are still counted;
+    the job's own count after it started), ``mode``, ``already_running`` on a
+    preview, the started ``job`` on a commit, ``dry_run`` and ``batch_id``
+    (plus ``confirm_token`` on a preview above the threshold). Requires
+    ``admin.settings``.
+    """
+    token = await _get_current_token()
+    if not token:
+        return "Error: Not authenticated. Please reconnect."
+    if (disabled := _writes_disabled_message()) is not None:
+        return disabled
+    if (problem := _locale_problem(locale)) is not None:
+        return _fmt(problem)
+    if mode not in _AI_TRANSLATION_MODES:
+        return _fmt(
+            {
+                "error": "invalid_mode",
+                "message": 'mode must be "missing" (new and changed strings) or "all".',
+                "mode": mode,
+            }
+        )
+    # A read before the batch: the batch counts the strings the job would send,
+    # so the confirm-token cycle applies above the threshold.
+    try:
+        detail = await TurboEAClient(token).get(_locale_path(locale))
+    except httpx.HTTPStatusError as exc:
+        return _fmt(_custom_locale_refusal(exc, "start_ai_translation_refused"))
+    count = _ai_translation_count(detail, mode)
+    rows = max(count or 0, 1)
+    if not dry_run:
+        gate = _confirmation_required_message("start_ai_translation", rows)
+        if gate is not None and not confirm_token:
+            return gate
+    body = {"mode": mode, "include_manual": mode == "all" and include_manual}
+    async with mutation_batch(
+        token,
+        tool_name="start_ai_translation",
+        row_count=rows,
+        dry_run=dry_run,
+        confirm_token=confirm_token or None,
+        scope=_ai_translation_scope(locale, body),
+    ) as batch:
+        if dry_run:
+            batch.summary = {"status": "preview", "strings": count}
+            return _fmt(
+                {
+                    "dry_run": True,
+                    "locale": locale,
+                    "mode": mode,
+                    "include_manual": body["include_manual"],
+                    "strings": count,
+                    "already_running": _job_running(detail),
+                    **_preview_fields(batch),
+                }
+            )
+        try:
+            data = await batch.client().post(_locale_path(locale, "/translate"), json=body)
+        except httpx.HTTPStatusError as exc:
+            batch.summary = {"status": "refused"}
+            refused = _custom_locale_refusal(exc, "start_ai_translation_refused")
+            return _fmt({**refused, "batch_id": batch.batch_id})
+        job = data.get("job") if isinstance(data, dict) else None
+        total = job.get("total") if isinstance(job, dict) else None
+        sent = total if isinstance(total, int) else count
+        batch.summary = {"status": "started", "strings": sent}
+        return _fmt(
+            {
+                "dry_run": False,
+                "locale": locale,
+                "mode": mode,
+                "strings": sent,
+                "job": job,
+                "note": (
+                    "The job runs in the background; follow it with "
+                    "list_custom_languages and stop it with stop_ai_translation."
+                ),
+                "batch_id": batch.batch_id,
+            }
+        )
+
+
+def _ai_translation_scope(locale: str, body: dict) -> str:
+    """What a ``start_ai_translation`` preview's token is bound to."""
+    return f"{locale}|{body['mode']}|{'manual' if body['include_manual'] else 'keep'}"
+
+
+@mcp.tool(annotations=_WRITE_ADDITIVE_ANNOT)
+async def stop_ai_translation(locale: str, dry_run: bool = True) -> str:
+    """Stop a custom language's AI translation job (``start_ai_translation``).
+
+    Strings it already stored stay; the rest stay untranslated. The dry run
+    (default) reports whether a job is running; ``dry_run=False`` stops it.
+
+    Args:
+        locale: The custom language code (from ``list_custom_languages``).
+        dry_run: When True (default), report only; False stops the job.
+
+    Returns: JSON with ``running`` (preview) or the ``job`` as it stands after
+    stopping, ``dry_run`` and ``batch_id``. Requires ``admin.settings``.
+    """
+    token = await _get_current_token()
+    if not token:
+        return "Error: Not authenticated. Please reconnect."
+    if (disabled := _writes_disabled_message()) is not None:
+        return disabled
+    if (problem := _locale_problem(locale)) is not None:
+        return _fmt(problem)
+    async with mutation_batch(
+        token, tool_name="stop_ai_translation", row_count=1, dry_run=dry_run
+    ) as batch:
+        try:
+            if dry_run:
+                detail = await batch.client().get(_locale_path(locale))
+                batch.summary = {"status": "preview"}
+                return _fmt(
+                    {
+                        "dry_run": True,
+                        "locale": locale,
+                        "running": _job_running(detail),
+                        **_preview_fields(batch),
+                    }
+                )
+            data = await batch.client().post(_locale_path(locale, "/translate/cancel"), json={})
+        except httpx.HTTPStatusError as exc:
+            batch.summary = {"status": "refused"}
+            return _fmt(
+                {
+                    **_custom_locale_refusal(exc, "stop_ai_translation_refused"),
+                    "batch_id": batch.batch_id,
+                }
+            )
+        job = data.get("job") if isinstance(data, dict) else None
+        # What the job is now: ``cancelled`` when one was running, else as it was.
+        batch.summary = {"status": job.get("status") if isinstance(job, dict) else None}
+        return _fmt({"dry_run": False, "locale": locale, "job": job, "batch_id": batch.batch_id})
 
 
 # ── Resources ───────────────────────────────────────────────────────────────

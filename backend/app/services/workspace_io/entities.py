@@ -39,6 +39,7 @@ from __future__ import annotations
 import copy
 import json
 import uuid as uuid_mod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -107,11 +108,18 @@ class EntitySection:
     # ``created_at`` is its date. Read back as a datetime; an empty cell
     # leaves the column to its server default.
     carry_timestamps: tuple[str, ...] = ()
-    # Whether an empty cell in a NOT NULL text column is the empty string
-    # rather than ``None``. The workbook reads ``""`` back as an empty cell,
-    # and a deleted comment or a rejection without a reason is stored with
-    # ``body == ""``: without this the row would reach the flush as NULL.
-    keep_empty_text: bool = False
+    # A natural key besides the preserved PK. A row whose PK is not on the
+    # target but whose natural key is (two instances that each created the
+    # same custom language) is matched to that row and skipped, and the
+    # source PK → target PK pair is recorded for the sections below it.
+    natural_key: tuple[str, ...] = ()
+    # ``(column, parent sheet)``: an FK to a section above whose rows may have
+    # been matched by natural key; the column is rewritten through that map,
+    # and a row whose parent was refused is refused too.
+    parent_columns: tuple[tuple[str, str], ...] = ()
+    # Refuses a row (``reason``) that must not land, whatever the bundle says
+    # (a custom language under a built-in code). Runs on the import kwargs.
+    refuse: Callable[[dict[str, Any]], str | None] | None = None
 
     def value_columns(self) -> list[str]:
         managed = (
@@ -126,9 +134,15 @@ class EntitySection:
 
     def empty_text_columns(self) -> frozenset[str]:
         """The value columns whose empty cell reads back as ``""``: the NOT
-        NULL string columns, when the section keeps empty text."""
-        if not self.keep_empty_text:
-            return frozenset()
+        NULL string columns, in every section.
+
+        The workbook reads ``""`` back as an empty cell, and a NOT NULL text
+        column can legitimately hold ``""`` (a cost line or a to-do without a
+        description, a deleted comment, a rejection without a reason). Read
+        as ``None``, one such row reached the flush as NULL and failed the
+        whole import (#1435). A column the sheet does not carry at all is a
+        different thing, a bundle older than the column, and is left to the
+        column's default (:func:`apply_entity_section`)."""
         values = set(self.value_columns())
         return frozenset(
             col.name
@@ -401,6 +415,27 @@ def heal_row(
     return True
 
 
+def _natural(section: EntitySection, row: dict[str, Any]) -> tuple[Any, ...]:
+    """The row's natural-key values (``()`` for a section without one, which
+    has no natural index to look it up in)."""
+    return tuple(row.get(column) for column in section.natural_key)
+
+
+def _rewrite_parents(
+    section: EntitySection, kwargs: dict[str, Any], matched: dict[str, dict[Any, Any]]
+) -> str | None:
+    """Point each ``parent_columns`` FK at the target row its parent was
+    matched to; the reason to refuse the row when its parent was refused."""
+    for col, parent in section.parent_columns:
+        parents = matched.get(parent) or {}
+        value = kwargs.get(col)
+        if value in parents:
+            if parents[value] is None:
+                return f"its {parent} row was refused"
+            kwargs[col] = parents[value]
+    return None
+
+
 async def apply_entity_section(
     db: AsyncSession,
     section: EntitySection,
@@ -409,12 +444,18 @@ async def apply_entity_section(
     resolver: CardResolver,
     email_to_id: dict[str, Any],
     remap: RemapContext | None = None,
+    matched: dict[str, dict[Any, Any]] | None = None,
 ) -> None:
     """Create rows for a section, preserving PKs and resolving card/user FKs.
+
+    ``matched`` is shared across the sections of one run: ``{sheet: {source
+    PK: target PK, or None when the row was refused}}`` (see
+    ``EntitySection.natural_key`` / ``parent_columns``).
 
     A dry run needs nothing of its own here: ``_run`` wraps the whole preview
     in one savepoint and rolls it back.
     """
+    matched = matched if matched is not None else {}
     rows = bundle.rows(section.sheet)
     if not rows:
         return
@@ -425,9 +466,18 @@ async def apply_entity_section(
     rewrite = section.rewrite if remap is not None else None
 
     existing_by_pk: dict[tuple, Any] = {}
+    existing_by_natural: dict[tuple, Any] = {}
     existing_objs: list[Any] = list((await db.execute(sa.select(model))).scalars().all())
     for obj in existing_objs:
         existing_by_pk[tuple(getattr(obj, c) for c in pk_cols)] = obj
+        if section.natural_key:
+            existing_by_natural[tuple(getattr(obj, c) for c in section.natural_key)] = obj
+    own_matches = matched.setdefault(section.sheet, {})
+
+    # An empty-text column no row carries is absent from the sheet (a bundle
+    # older than the column): it takes its default rather than ``""``.
+    carried = set().union(*(r.keys() for r in rows))
+    absent_text = empty_text - carried
 
     for row in _topo_rows(rows, section):
         # Build the full row first — a PK column can itself be a card FK (the
@@ -435,6 +485,8 @@ async def apply_entity_section(
         # the card reference is resolved.
         kwargs: dict[str, Any] = {}
         for col in value_cols:
+            if col in absent_text:
+                continue
             kwargs[col] = import_value(model, col, row.get(col), empty_text)
         for col in section.carry_timestamps:
             # An empty cell must not insert NULL: the server default dates it.
@@ -484,11 +536,25 @@ async def apply_entity_section(
                 data[subkey] = sub
             kwargs[col] = data
 
+        refused = _rewrite_parents(section, kwargs, matched) or (
+            section.refuse(kwargs) if section.refuse is not None else None
+        )
         pk_vals = tuple(kwargs.get(c) for c in pk_cols)
+        if refused is not None:
+            sr.conflict += 1
+            sr.errors.append(f"{section.sheet}: {refused} — row skipped")
+            if len(pk_vals) == 1:
+                own_matches[pk_vals[0]] = None
+            continue
         if any(v is None for v in pk_vals):
             sr.failed += 1
             continue
         current = existing_by_pk.get(pk_vals)
+        if current is None:
+            # Not there by id: maybe by natural key (``EntitySection.natural_key``).
+            current = existing_by_natural.get(_natural(section, kwargs))
+            if current is not None and len(pk_vals) == 1:
+                own_matches[pk_vals[0]] = getattr(current, pk_cols[0])
         if current is not None:
             if rewrite is not None and remap is not None:
                 original = {c: copy.deepcopy(kwargs.get(c)) for c in section.id_bearing_columns}
@@ -504,5 +570,7 @@ async def apply_entity_section(
         obj = model(**kwargs)
         db.add(obj)
         existing_by_pk[pk_vals] = obj
+        if section.natural_key:
+            existing_by_natural[_natural(section, kwargs)] = obj
         sr.created += 1
     await db.flush()

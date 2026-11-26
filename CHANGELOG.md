@@ -5,6 +5,43 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.215.2] - 2026-11-26
+
+### Fixed
+- Workspace import no longer fails when the bundle holds a cost line, to-do, comment or other item saved with an empty text field, such as a cost line without a description (#1435).
+
+### Changed
+- The workspace import preview and result now say how many users will be (or were) created deactivated, and where to activate them.
+
+## [2.215.1] - 2026-11-26
+
+### Security
+- The frontend and edge nginx images now run **nginx 1.30.8**, which fixes CVE-2026-132779 (excessive CPU usage in TLS 1.3 when `ssl_early_data` is on). Turbo EA's nginx configuration does not switch that setting on, so no installation was exposed; the normal upgrade is enough.
+## [2.215.0] - 2026-11-26
+
+### Added
+- Custom languages: a **Community languages** block lists the language packs of the community library, with each one's coverage and the version it was made for, and installs or updates one in a click — checked like an imported file, added switched off, marked as community-provided and not reviewed.
+- An update from the community library keeps the strings you corrected by hand, unless you choose to replace them; the review table now shows where each translation came from.
+- `LANGUAGE_CATALOGUE_URL` (Helm `customLanguages.catalogueUrl`) sets the community library's address; empty switches the feature off.
+- MCP: `start_ai_translation` and `stop_ai_translation` run the server's AI translation job for a whole custom language in one call.
+- MCP: a custom language's English text that appears in many places is listed once by `get_untranslated_strings`, and one translation from `submit_translations` fills every untranslated string with the same English (never one already translated; `fill_identical=false` turns it off).
+
+### Changed
+- MCP: `start_ai_translation` is marked destructive and, for a job above the confirmation threshold, needs the preview's `confirm_token` to start; the token is valid only for the language and mode that were previewed.
+- MCP: `submit_translations` saves on its first call with no preview or confirm token, takes up to 2000 strings per call (`MCP_MAX_TRANSLATIONS_PER_CALL`), attaches the source hashes itself and answers with counts per section instead of every key.
+
+### Fixed
+- Importing a language pack the browser cannot read now says so, instead of reporting invalid JSON.
+
+## [2.214.0] - 2026-11-25
+
+### Added
+- Custom languages: administrators can add a language that does not ship with Turbo EA under **Settings → General** — in any script, right-to-left included — translate it, review and correct its strings, and offer it to users once it is ready.
+- A custom language also translates the names of card types, fields and their options, relations, stakeholder roles and the other labels stored in the metamodel.
+- Custom languages can be exported as a language-pack file (new and changed strings, all strings, the current translations, or a share pack without anything specific to your installation) and imported back after translating it anywhere; each string is checked and a report lists what was applied or rejected.
+- **Translate with AI** fills a custom language with the configured AI provider — only the new and changed strings by default, keeping manual corrections — so after an upgrade only what changed needs translating.
+- MCP: `list_custom_languages`, `get_untranslated_strings` and `submit_translations` let an AI assistant translate a custom language (cap `MCP_MAX_TRANSLATIONS_PER_CALL`, default 200).
+
 ## [2.213.0] - 2026-11-24
 
 ### Added
