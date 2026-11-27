@@ -69,7 +69,7 @@ Felter definerer de brugerdefinerede egenskaber, der er tilgængelige på kort a
 | **Datakvalitet** | Hvert felts bidrag til scoren håndteres i panelet **Datakvalitet** (se nedenfor) |
 | **Skrivebeskyttet** | Forhindrer manuel redigering (nyttigt for beregnede felter) |
 
-**Sådan håndhæves påkrævede felter.** Oprettelse af et kort kræver aldrig disse felter — kort kan oprettes hurtigt og udfyldes senere. Så længe et påkrævet felt er tomt, forbliver kortets datakvalitetsscore på **0**, og kortets detaljeside viser et advarselsbanner med de felter, der skal udfyldes. Når en kortsektion redigeres, kan den ikke gemmes, før dens påkrævede felter er udfyldt, og API'et afviser at tømme et påkrævet felt, der allerede har en værdi. Boolske og skrivebeskyttede (beregnede) felter er undtaget.
+**Sådan håndhæves påkrævede felter.** Oprettelse af et kort kræver aldrig disse felter — kort kan oprettes hurtigt og udfyldes senere. Så længe et påkrævet felt er tomt, forbliver kortets datakvalitetsscore på **0**, og kortets detaljeside viser et advarselsbanner med de felter, der skal udfyldes. Når en kortsektion redigeres, markeres et påkrævet felt, der stadig er tomt, med en note, men det forhindrer ikke, at sektionen gemmes, så et kort kan udfyldes ét felt ad gangen; at tømme et påkrævet felt, der allerede har en værdi, afvises, både i editoren og af API'et. Boolske og skrivebeskyttede (beregnede) felter er undtaget.
 
 Klik på **+ Tilføj felt** for at oprette et nyt felt, eller klik på et eksisterende felt for at redigere det i **Feltredigeringsdialogen**.
 
@@ -143,6 +143,10 @@ En relation, der er markeret som påkrævet på korttypen, gælder for alle kort
 #### Interessentroller
 
 Definer brugerdefinerede roller for denne type (f.eks. "Application Owner", "Technical Owner"). Hver rolle bærer **tilladelser på kortniveau**, der kombineres med brugerens applikationsrolle, når der tilgås et kort. Se [Brugere og roller](users.md) for mere om tilladelsesmodellen.
+
+En type, du opretter, starter med to roller, **Ansvarlig** og **Observatør**, med de samme rettigheder som på de indbyggede typer. Rediger, arkivér eller slet dem som enhver anden rolle. Tilføjelse af egne roller beholder dem.
+
+Brug pilene **op** og **ned** på en rolle til at ændre dens plads på listen. Fanen **Interessenter** på et kort og rollevælgeren viser rollerne i denne rækkefølge. Roller, der ikke tæller med i datakvaliteten (se **Tæller med i datakvaliteten** nedenfor), kommer altid sidst på et kort under **Følger dette kort**, så personer, der blot følger et kort, aldrig forveksles med dets ejere.
 
 Hver rolle har en **nøgle** (den identifikator der gemmes på kort, og som bruges af `stakeholder:<rollenøgle>`-import/eksportkolonnerne) og en **etiket** (det brugerne ser). Nøglen følger samme konvention som enhver anden metamodelnøgle — kun bogstaver og cifre, begyndende med et bogstav, 3–50 tegn, efter konvention camelCase som `businessArchitect`. Den udfyldes automatisk ud fra etiketten, så du sjældent selv skal skrive en.
 
@@ -220,7 +224,7 @@ Oversættelser gemmes sammen med hver korttype og opløses ved render-tid ved hj
 - **Indbyggede typer** soft-slettes (skjules) og kan gendannes. Slet-knappen i typeeditoren er låst for dem — brug **Skjul type** i stedet.
 - **Brugerdefinerede typer** — dem du selv har oprettet — kan **slettes permanent**. Åbn typen, klik på **Slet type** i toppen, og Turbo EA viser alt, som sletningen tager med sig: typens kort (med deres relationer, interessenter, kommentarer og vedhæftninger), de relationstyper der forbinder den med andre typer, de beregninger der er rettet mod den, og dens interessentroller. Skriv typens nøgle for at låse **Slet permanent** op. Sletningen kan ikke fortrydes; typens arkiverede kort slettes også, og hvert slettet kort registreres i sikkerheds- og administrationsloggen og i hændelseshistorikken.
 
-## Relationstyper
+## Relationstyper {: #relation-types }
 
 Relationstyper definerer de tilladte forbindelser mellem korttyper. Hver relationstype specificerer:
 
@@ -236,6 +240,8 @@ Relationstyper definerer de tilladte forbindelser mellem korttyper. Hver relatio
 Klik på **+ Ny relationstype** for at oprette en relation, eller klik på en eksisterende for at redigere dens etiketter og egenskaber.
 
 Hver relationsrække har desuden kontakterne **Synlig** og **Obligatorisk** for *hver* af sine to ender, navngivet efter den korttype de gælder: Synlig afgør, om relationen vises på den types kortdetaljeside, Obligatorisk om den skal udfyldes. En relationstype, hvis to ender er samme korttype, får ét sæt kontakter pr. retning, så den indgående side kan konfigureres separat fra den udgående.
+
+Slå **Spor livscyklus** til i oprettelses- eller redigeringsdialogen for en relationstype — også indbyggede typer — for at give relationer af den type deres egen livscyklus — de fem faser fra kortets livscyklus — så en relation kan være planlagt, aktiv eller afsluttet uafhængigt af de to kort, den forbinder. I kortets detaljer sætter eller rydder et ur på hver relation af den type dens datoer. Sådan modellerer du for eksempel den samme applikation, som flere organisationer bruger fra forskellige datoer: én relation pr. organisation, hver med sin egen periode. En relation, der er planlagt eller afsluttet, tæller ikke længere med i rapporter, flag, beregnede felter og datakvalitetsscoren, men står stadig på kortet (se [Hvornår en relation gælder](../guide/card-details.md#when-a-relation-applies)). En relationstype med kontakten slået til viser en **Livscyklus**-chip i relationslisten, så du kan se, hvilke typer der sporer den, uden at åbne dialogen. Kontakten afgør kun, om livscyklussen kan redigeres på kortet: datoer, en relation allerede har — fra en import, API'et eller en udvidelse — vises og tælles uanset, og når den slås fra, slettes ingen datoer. Et kortpar har én relation pr. relationstype, så hver relation har én enkelt periode. Ændringen af kontakten logges i sikkerheds- og adminloggen.
 
 Felterne **Etiket** og **Omvendt etiket** skrives på det sprog, du bruger lige nu — feltets betegnelse viser hvilket (for eksempel *Etiket (Dansk)*). Når du omdøber en relation, opdateres det sprog alle steder, hvor udsagnsordet optræder: afsnittet **Relationer** på et kort, inventarets relationskolonner, rapporter, portaler og diagrammer. Andre sprog beholder deres egen ordlyd, indtil du oversætter dem.
 

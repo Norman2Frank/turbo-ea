@@ -59,6 +59,7 @@ from app.services.seed import (
     SUCCESSOR_TRANSLATIONS,
     _inject_english_translations_relation,
 )
+from app.services.stakeholder_service import DEFAULT_STAKEHOLDER_ROLES, ensure_role_definitions
 
 logger = logging.getLogger("turboea.metamodel")
 
@@ -111,6 +112,7 @@ _RELATION_TYPE_AUDIT_SCALARS = (
     "source_mandatory",
     "target_visible",
     "target_mandatory",
+    "lifecycle_enabled",
 )
 _RELATION_TYPE_AUDIT_JSON = (
     "source_type_key",
@@ -648,7 +650,18 @@ def _serialize_relation_type(r: RelationType) -> dict:
         "source_mandatory": r.source_mandatory,
         "target_visible": r.target_visible,
         "target_mandatory": r.target_mandatory,
+        "lifecycle_enabled": bool(r.lifecycle_enabled),
     }
+
+
+def _validate_lifecycle_enabled(body: dict) -> None:
+    """``lifecycle_enabled`` is a switch: only a JSON boolean is accepted.
+
+    It is never locked, built-in relation types included — it decides only
+    whether the UI offers the relation lifecycle editor, and an admin may turn
+    that on for a shipped relation type as for their own."""
+    if "lifecycle_enabled" in body and not isinstance(body["lifecycle_enabled"], bool):
+        raise HTTPException(400, "lifecycle_enabled must be a boolean")
 
 
 # Fields of a built-in attribute *definition* (field or option) that admins may
@@ -1297,10 +1310,7 @@ async def create_type(
     max_order = await db.execute(select(func.max(CardType.sort_order)))
     next_order = (max_order.scalar() or 0) + 1
 
-    default_roles = [
-        {"key": "responsible", "label": "Responsible"},
-        {"key": "observer", "label": "Observer"},
-    ]
+    default_roles = [dict(r) for r in DEFAULT_STAKEHOLDER_ROLES]
     await extension_registry.refresh_from_db(db)
     # Nothing is stored yet, so the guard strips every stamp a body sends: a
     # new type cannot claim fields or subtypes for an extension.
@@ -1343,6 +1353,12 @@ async def create_type(
         translations=body.get("translations", {}),
     )
     db.add(t)
+    await db.flush()
+    # The roles need definition rows, not just the legacy JSONB list: without
+    # them they grant nothing and vanish once an admin adds a role (#1437).
+    # An empty or malformed list gets the defaults the picker showed for it.
+    roles = t.stakeholder_roles if isinstance(t.stakeholder_roles, list) else []
+    await ensure_role_definitions(db, t.key, roles or default_roles)
     if t.has_successors:
         # Auto-provide the lineage relation type so the card detail lineage
         # section renders (issue #729).
@@ -1855,6 +1871,8 @@ async def create_relation_type(
         if not exists.scalar_one_or_none():
             raise HTTPException(400, f"Type '{type_key}' does not exist")
 
+    _validate_lifecycle_enabled(body)
+
     max_order = await db.execute(select(func.max(RelationType.sort_order)))
     next_order = (max_order.scalar() or 0) + 1
 
@@ -1875,6 +1893,7 @@ async def create_relation_type(
         source_mandatory=body.get("source_mandatory", False),
         target_visible=body.get("target_visible", True),
         target_mandatory=body.get("target_mandatory", False),
+        lifecycle_enabled=body.get("lifecycle_enabled", False),
     )
     db.add(rt)
     labels = await audit_labels.card_type_labels(db, (rt.source_type_key, rt.target_type_key))
@@ -1943,7 +1962,9 @@ async def update_relation_type(
         "source_mandatory",
         "target_visible",
         "target_mandatory",
+        "lifecycle_enabled",
     ]
+    _validate_lifecycle_enabled(body)
     for field in updatable:
         if field not in body:
             continue

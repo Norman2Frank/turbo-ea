@@ -70,7 +70,7 @@ Los campos definen los atributos personalizados disponibles en fichas de este ti
 | **Calidad de datos** | La contribución de cada campo a la puntuación se gestiona en el panel **Calidad de datos** (ver más abajo) |
 | **Solo lectura** | Impide la edición manual (útil para campos calculados) |
 
-**Cómo se aplican los campos obligatorios.** Crear una tarjeta nunca exige estos campos: las tarjetas pueden crearse rápidamente y completarse después. Mientras algún campo obligatorio siga vacío, la puntuación de calidad de datos de la tarjeta permanece en **0** y la página de detalle muestra un aviso con los campos que deben completarse. Al editar una sección de la tarjeta, no se puede guardar hasta que sus campos obligatorios estén completos, y la API rechaza vaciar un campo obligatorio que ya tiene valor. Los campos booleanos y de solo lectura (calculados) están exentos.
+**Cómo se aplican los campos obligatorios.** Crear una tarjeta nunca exige estos campos: las tarjetas pueden crearse rápidamente y completarse después. Mientras algún campo obligatorio siga vacío, la puntuación de calidad de datos de la tarjeta permanece en **0** y la página de detalle muestra un aviso con los campos que deben completarse. Al editar una sección de la tarjeta, un campo obligatorio que sigue vacío se marca con una nota, pero no impide guardar la sección, de modo que una tarjeta puede completarse campo a campo; vaciar un campo obligatorio que ya tiene valor se rechaza, tanto en el editor como en la API. Los campos booleanos y de solo lectura (calculados) están exentos.
 
 Haga clic en **+ Agregar Campo** para crear un nuevo campo, o haga clic en un campo existente para editarlo en el **Diálogo Editor de Campos**.
 
@@ -144,6 +144,10 @@ Una relación marcada como obligatoria en el tipo de ficha se aplica a todas las
 #### Roles de Partes Interesadas
 
 Defina roles personalizados para este tipo (ej., «Propietario de Aplicación», «Propietario Técnico»). Cada rol tiene **permisos a nivel de ficha** que se combinan con el rol a nivel de aplicación del usuario al acceder a una ficha. Ver [Usuarios y Roles](users.es.md) para más información sobre el modelo de permisos.
+
+Un tipo que usted crea comienza con dos roles, **Responsable** y **Observador**, con los mismos permisos que tienen en los tipos integrados. Edítelos, archívelos o elimínelos como cualquier otro rol. Al añadir sus propios roles, se conservan.
+
+Use las flechas **arriba** y **abajo** de un rol para cambiar su lugar en la lista. La pestaña **Partes interesadas** de una tarjeta y el selector de roles muestran los roles en este orden. Los roles que no cuentan para la calidad de datos (vea **Cuenta para la calidad de datos** más abajo) van siempre al final en una tarjeta, bajo **Siguen esta tarjeta**, para que quienes solo siguen una tarjeta nunca se confundan con sus responsables.
 
 Cada rol tiene una **clave** (el identificador almacenado en las tarjetas, utilizado por las columnas de importación/exportación `stakeholder:<clave_del_rol>`) y una **etiqueta** (lo que ven los usuarios). La clave sigue la misma convención que cualquier otra clave del metamodelo: solo letras y dígitos, empezando por una letra, de 3 a 50 caracteres, por convención en camelCase como `businessArchitect`. Se rellena automáticamente a partir de la etiqueta, por lo que rara vez tendrá que escribirla.
 
@@ -221,7 +225,7 @@ Las traducciones se almacenan junto con cada tipo de ficha y se resuelven en tie
 - Los **tipos predefinidos** se eliminan suavemente (se ocultan) y pueden restaurarse. El botón de eliminar del editor de tipos está bloqueado para ellos — use **Ocultar tipo** en su lugar.
 - Los **tipos personalizados** — los que usted creó — pueden **eliminarse permanentemente**. Abra el tipo, haga clic en **Eliminar tipo** en la cabecera y Turbo EA muestra todo lo que la eliminación se llevará consigo: las cards del tipo (con sus relaciones, partes interesadas, comentarios y adjuntos), los tipos de relación que lo conectan con otros tipos, los cálculos dirigidos a él y sus roles de parte interesada. Escriba la clave del tipo para desbloquear **Eliminar permanentemente**. La eliminación no se puede deshacer; las cards archivadas del tipo también se eliminan, y cada card eliminada queda registrada en el registro de seguridad y administración y en el historial de eventos.
 
-## Tipos de Relación
+## Tipos de Relación {: #relation-types }
 
 Los tipos de relación definen las conexiones permitidas entre tipos de fichas. Cada tipo de relación especifica:
 
@@ -237,6 +241,8 @@ Los tipos de relación definen las conexiones permitidas entre tipos de fichas. 
 Haga clic en **+ Nuevo Tipo de Relación** para crear una relación, o haga clic en una existente para editar sus etiquetas y atributos.
 
 Cada fila de relación lleva además los interruptores **Visible** y **Obligatorio** para *cada uno* de sus dos extremos, indicando el tipo de ficha al que se aplican: Visible decide si la relación aparece en la página de detalle de ese tipo, Obligatorio si debe rellenarse. Un tipo de relación cuyos dos extremos son la misma ficha recibe un par de interruptores por dirección, de modo que el lado entrante se configura por separado del saliente.
+
+Active **Seguir el ciclo de vida** en el cuadro de diálogo de creación o edición de un tipo de relación —incluidos los tipos integrados— para dar a las relaciones de ese tipo su propio ciclo de vida —las cinco fases del ciclo de vida de una ficha—, de modo que una relación pueda estar planificada, activa o finalizada con independencia de las dos fichas que conecta. En el detalle de la ficha, un reloj en cada relación de ese tipo establece o borra sus fechas. Así se modela, por ejemplo, una misma aplicación utilizada por varias organizaciones desde fechas distintas: una relación por organización, cada una con su propio periodo. Una relación planificada o finalizada deja de contar en los informes, los indicadores, los campos calculados y la puntuación de calidad de datos, pero sigue apareciendo en la ficha (véase [Cuándo se aplica una relación](../guide/card-details.md#when-a-relation-applies)). Un tipo de relación con el interruptor activado muestra un chip **Ciclo de vida** en la lista de relaciones, para que vea qué tipos lo siguen sin abrir el cuadro de diálogo. El interruptor solo decide si el ciclo de vida se puede editar en la ficha: las fechas que una relación ya tiene —procedentes de una importación, de la API o de una extensión— se muestran y se cuentan diga lo que diga, y desactivarlo no borra ninguna fecha. Un par de fichas tiene una relación por tipo de relación, por lo que cada relación tiene un único periodo. El cambio del interruptor queda registrado en el registro de seguridad y administración.
 
 Los campos **Etiqueta** y **Etiqueta Inversa** se escriben en el idioma que está utilizando en ese momento: el rótulo del campo indica cuál (por ejemplo, *Etiqueta (Español)*). Cambiar el nombre de una relación actualiza ese idioma en todos los lugares donde aparece el verbo: la sección **Relaciones** de una ficha, las columnas de relación del inventario, los informes, los portales y los diagramas. Los demás idiomas conservan su propia redacción hasta que los traduzca.
 

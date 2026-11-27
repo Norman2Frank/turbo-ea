@@ -94,7 +94,7 @@ Lageret bruger en **AG Grid**-datatabel med kraftfulde funktioner:
 | **Lifecycle** | Aktuel livscyklus-tilstand |
 | **Approval Status** | Gennemgangs-status-badge |
 | **Data Quality** | Fuldstændigheds-procent med visuel ring |
-| **Relations** | Én kolonne pr. relation med dens verbum og den relaterede korttype som overskrift (f.eks. *bruger IT-komponent*): navnene på de kort, der er knyttet via den relation, sorteret alfabetisk, med en klikbar popover til at tilføje eller fjerne relationer af den slags — kort, der allerede er tilknyttet, skjules fra dens vælger, undtagen ved en hierarkisk type, hvor vælgeren viser hele hierarkiet som et indrykket træ og lader de kort blive liggende nedtonet. Gemte visninger og kolonnelayouts fra før relationskolonnerne blev opdelt pr. relation, åbner med de nye kolonner i stedet for den gamle |
+| **Relations** | Én kolonne pr. relation med dens verbum og den relaterede korttype som overskrift (f.eks. *bruger IT-komponent*): navnene på de kort, der er knyttet via den relation, sorteret alfabetisk, med en klikbar popover til at tilføje eller fjerne relationer af den slags — kort, der allerede er tilknyttet, skjules fra dens vælger, undtagen ved en hierarkisk type, hvor vælgeren viser hele hierarkiet som et indrykket træ og lader de kort blive liggende nedtonet. Cellen samt relationsfiltrene og deres tællere viser kun de relationer, der gælder i dag efter deres egne [livscyklusdatoer](card-details.md#when-a-relation-applies); popoveren viser alle cellens relationer, med en chip som *Planlagt · fra …* eller *Afsluttet …* på en, der ikke gælder, så en relation, der blot er afsluttet, ikke tilføjes igen. Gemte visninger og kolonnelayouts fra før relationskolonnerne blev opdelt pr. relation, åbner med de nye kolonner i stedet for den gamle |
 
 **Tabel-funktioner:**
 
@@ -394,6 +394,10 @@ Klik på **Export** i værktøjslinjen. Det aktuelle gitter-filter bestemmer ind
 - **Intet filter eller multi-type-filter** → ét ark pr. type til stede, plus Relations-arket, plus `_Meta`. Projektmappen er fuldt redigerbar og kan re-importeres uden at miste pr.-type-egenskaber.
 
 Du kan også vælge **Eksportér aktuel visning** i Export-menuen — et fladt enkelt-ark-øjebliksbillede, der afspejler det viste (kun de synlige kolonner, i deres aktuelle rækkefølge, for de filtrerede rækker). Det er beregnet til deling og er **ikke egnet til genimport**. Hvis relationskolonnerne stadig indlæses, venter eksporten på dem, så de aldrig kan ende med at være tomme.
+
+En Excel-celle rummer højst 32.767 tegn. Når en værdi er længere — en meget lang beskrivelse eller ét kort med omkring tusind relationer af samme type — stopper eksporten og angiver kortet og kolonnen i stedet for at skrive en ødelagt fil.
+
+En Excel-celle rummer højst 32.767 tegn. Når en værdi er længere — en meget lang beskrivelse eller ét kort med omkring tusind relationer af samme type — stopper eksporten og angiver kortet og kolonnen i stedet for at skrive en ødelagt fil.
 
 ### Round-trip-tips
 

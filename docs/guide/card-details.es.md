@@ -147,6 +147,19 @@ Muestra todas las conexiones con otras fichas, agrupadas por tipo de relación. 
 
 ![Fichas vinculadas a través de subelementos, agrupadas por subtipo](../assets/img/es/60_ficha_subelementos_relaciones.png)
 
+#### Cuándo se aplica una relación {: #when-a-relation-applies }
+
+Una relación puede tener su propio **ciclo de vida**: las mismas cinco fases que una ficha (Plan, Fase de Entrada, Activo, Fase de Salida, Fin de Vida). Sirve para hechos que solo valen durante un periodo: una aplicación global utilizada por varias organizaciones, cada una desde una fecha distinta, o una organización que deja de usar una aplicación el año que viene mientras otras continúan. Una relación sin fechas simplemente está vigente, como lo estaba toda relación hasta ahora.
+
+- **Definir las fechas**: cuando un administrador ha activado **Seguir el ciclo de vida** para el tipo de relación (véase [Tipos de relación](../admin/metamodel.md#relation-types)), cada fila de relación lleva un icono de **reloj** junto a su botón de eliminar, para quien pueda gestionar relaciones. El icono aparece atenuado con contorno discontinuo mientras la relación no tiene fechas. Haga clic para abrir un campo de fecha por fase; guarde para aplicar o use **Borrar fechas** para que la relación vuelva a estar siempre vigente. Los campos avisan —sin impedir guardar— cuando una fase tiene fecha posterior a una que debería seguirla, igual que en el ciclo de vida de la ficha.
+- **Planificada**: una relación cuya fecha **Activo** aún está por llegar (o que tiene fecha de Plan o de Fase de Entrada pero todavía no de Activo) no ha comenzado. Su fila permanece en la lista con una etiqueta como *Planificada · desde 1 mar 2027*.
+- **Hasta**: una relación vigente cuya fecha de **Fin de Vida** aún está por llegar muestra *Hasta …* con esa fecha.
+- **Finalizada**: cuando llega la fecha de **Fin de Vida**, la relación ha finalizado. Las relaciones finalizadas siguen registradas pero se ocultan: cada grupo ofrece **Mostrar finalizadas (N)** para listarlas, con una etiqueta *Finalizada el …*.
+
+Solo cuentan las relaciones **vigentes hoy**. Una relación planificada o finalizada no cuenta en los informes, el indicador de huérfana, los paneles, los campos calculados ni la puntuación de calidad de datos, y una relación obligatoria que solo tiene relaciones planificadas o finalizadas sigue marcándose como ausente; el grupo lo indica. El recuento junto al título de la sección también cuenta solo las relaciones vigentes. Nada se recalcula a mano: cuando llega la fecha de inicio o de fin de una relación, las fichas de ambos extremos se actualizan durante la noche.
+
+Las fechas de una relación se muestran vengan de donde vengan —una importación de LeanIX, una transferencia de espacio de trabajo, la API, un asistente de IA o una extensión— aunque el tipo de relación no ofrezca el reloj. Un par de fichas tiene una relación por tipo de relación, así que una relación tiene un único periodo: una organización que deja de usar una aplicación y la adopta de nuevo más tarde no puede representarse como dos periodos en la misma relación. Los cambios en las fechas de una relación aparecen en la pestaña **Historial** de ambas fichas, bajo la relación a la que pertenecen.
+
 ### Sección de Dependencias
 
 Una [Layered Dependency View](reports.md) de la ficha y de todo lo que está a un salto de distancia, agrupado en las cuatro capas de arquitectura. Mayús-clic en una ficha para volver a centrar la vista y recorrer el panorama sin salir de la página.
@@ -208,6 +221,8 @@ Las partes interesadas son personas con un **rol** específico en esta ficha. Lo
 Las asignaciones de partes interesadas afectan los **permisos**: los permisos efectivos de un usuario en una ficha son la combinación de su rol a nivel de aplicación y cualquier rol de parte interesada que tenga en esa ficha.
 
 Cuando un rol tiene un **color** definido en el metamodelo, su grupo se marca con él, de modo que puede distinguir un propietario de un observador de un vistazo.
+
+Los roles aparecen en el orden que su administrador haya fijado para el tipo de tarjeta. Los roles que no convierten a nadie en responsable de la tarjeta, como **Observador**, van al final bajo **Siguen esta tarjeta**: las personas listadas ahí siguen la tarjeta y se mantienen informadas, pero no cuentan como sus responsables ni para su calidad de datos.
 
 Cuando un rol tiene una **descripción**, aparece un icono de información junto a su nombre: pase el cursor sobre él para leer qué significa el rol. La descripción también se muestra bajo el nombre del rol en el selector de roles al añadir una parte interesada.
 

@@ -9285,6 +9285,71 @@
         "title": "MassEolResult",
         "type": "object"
       },
+      "McpSessionCreate": {
+        "properties": {
+          "client_name": {
+            "default": "MCP Client",
+            "maxLength": 200,
+            "title": "Client Name",
+            "type": "string"
+          },
+          "scope": {
+            "default": "mcp:read",
+            "maxLength": 200,
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "title": "McpSessionCreate",
+        "type": "object"
+      },
+      "McpSessionRefresh": {
+        "properties": {
+          "refresh_token": {
+            "maxLength": 200,
+            "title": "Refresh Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "McpSessionRefresh",
+        "type": "object"
+      },
+      "McpSessionTokens": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "refresh_token": {
+            "title": "Refresh Token",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "expires_in",
+          "refresh_token",
+          "scope"
+        ],
+        "title": "McpSessionTokens",
+        "type": "object"
+      },
       "McpSettingsPayload": {
         "properties": {
           "enabled": {
@@ -11059,6 +11124,14 @@
             ],
             "title": "Group Name"
           },
+          "groups": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PpmGroupRef"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -11286,6 +11359,25 @@
         "title": "PpmGroupOption",
         "type": "object"
       },
+      "PpmGroupRef": {
+        "description": "A group a board row belongs to: the related card that names it.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "PpmGroupRef",
+        "type": "object"
+      },
       "PpmPublicDashboard": {
         "description": "The three KPI values the board actually renders.\n\nThe internal dashboard also carries ``by_subtype``, ``by_status``,\n``health_cost``, ``health_scope`` and ``total_actual``; none of them is drawn\non the board, so none of them is published.",
         "properties": {
@@ -11317,6 +11409,25 @@
           "total_initiatives"
         ],
         "title": "PpmPublicDashboard",
+        "type": "object"
+      },
+      "PpmPublicGroup": {
+        "description": "A group a board row belongs to. ``id`` is the opaque per-response token\nthe row's ``group_id`` uses, never the group card's id.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "PpmPublicGroup",
         "type": "object"
       },
       "PpmPublicGroupOption": {
@@ -11367,7 +11478,7 @@
         "type": "object"
       },
       "PpmPublicItem": {
-        "description": "One board row.\n\n``id`` is the initiative's real card UUID \u2014 a portfolio portal links its rows\nto ``/ppm/{id}`` behind the login wall, so it is exposed by design.\n``parent_id`` is set only when the parent is itself a row of the same\nresponse, so it repeats an ``id`` already published and lets the board nest\nits rows; a parent the portal does not publish reads ``None``. Every other\nidentifier is withheld: ``group_id`` is an opaque per-response token, and the\nreport, reporter and stakeholder ids are not emitted at all. ``group_anchor``\nmarks the row that names its group under a subtype grouping.",
+        "description": "One board row.\n\n``id`` is the initiative's real card UUID \u2014 a portfolio portal links its rows\nto ``/ppm/{id}`` behind the login wall, so it is exposed by design.\n``parent_id`` is set only when the parent is itself a row of the same\nresponse, so it repeats an ``id`` already published and lets the board nest\nits rows; a parent the portal does not publish reads ``None``. Every other\nidentifier is withheld: ``group_id`` and the ids in ``groups`` are opaque\nper-response tokens (``group_id`` repeats the first of ``groups``), and the\nreport, reporter and stakeholder ids are not emitted at all. ``group_anchor``\nmarks the row that names its group under a subtype grouping.",
         "properties": {
           "capex_actual": {
             "anyOf": [
@@ -11428,6 +11539,14 @@
               }
             ],
             "title": "Group Name"
+          },
+          "groups": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PpmPublicGroup"
+            },
+            "title": "Groups",
+            "type": "array"
           },
           "id": {
             "title": "Id",
@@ -14103,6 +14222,27 @@
             ],
             "title": "Description"
           },
+          "lifecycle": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle"
+          },
           "row_index": {
             "title": "Row Index",
             "type": "integer"
@@ -14257,6 +14397,27 @@
             ],
             "title": "Description"
           },
+          "lifecycle": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle"
+          },
           "source_id": {
             "title": "Source Id",
             "type": "string"
@@ -14373,6 +14534,11 @@
             "title": "Id",
             "type": "string"
           },
+          "lifecycle": {
+            "additionalProperties": true,
+            "title": "Lifecycle",
+            "type": "object"
+          },
           "source": {
             "anyOf": [
               {
@@ -14439,6 +14605,27 @@
               }
             ],
             "title": "Description"
+          },
+          "lifecycle": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifecycle"
           }
         },
         "title": "RelationUpdate",
@@ -17017,6 +17204,25 @@
         "title": "SsoCallbackRequest",
         "type": "object"
       },
+      "SsoRoleMapRow": {
+        "description": "One row of the SSO role map: a directory value (group, app role) and the\nTurbo EA role key it grants.",
+        "properties": {
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "role"
+        ],
+        "title": "SsoRoleMapRow",
+        "type": "object"
+      },
       "SsoSettingsPayload": {
         "properties": {
           "authorization_endpoint": {
@@ -17044,6 +17250,17 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "extra_scopes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extra Scopes"
+          },
           "issuer_url": {
             "default": "",
             "title": "Issuer Url",
@@ -17058,6 +17275,31 @@
             "default": "microsoft",
             "title": "Provider",
             "type": "string"
+          },
+          "role_claim": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Claim"
+          },
+          "role_map": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SsoRoleMapRow"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role Map"
           },
           "tenant_id": {
             "default": "organizations",
@@ -17352,6 +17594,23 @@
           "label"
         ],
         "title": "StakeholderRoleCreate",
+        "type": "object"
+      },
+      "StakeholderRoleOrder": {
+        "properties": {
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "StakeholderRoleOrder",
         "type": "object"
       },
       "StakeholderRoleUpdate": {
@@ -23797,6 +24056,167 @@
         ]
       }
     },
+    "/api/v1/auth/mcp/sessions": {
+      "get": {
+        "description": "Live connections: the caller's own, or with ``everyone=true`` and\n``admin.mcp`` every person's, each then naming its person.",
+        "operationId": "list_mcp_sessions_api_v1_auth_mcp_sessions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "everyone",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Everyone",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Mcp Sessions",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "description": "Open a connection for the signed-in person. MCP server only.",
+        "operationId": "create_mcp_session_api_v1_auth_mcp_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpSessionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpSessionTokens"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Mcp Session",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/mcp/sessions/refresh": {
+      "post": {
+        "description": "Renew a connection: a new access token and the next refresh token. MCP server only.\n\n400 ``invalid_grant`` for a token that is unknown, ended or expired, and for\na replaced token that comes back, which also ends the connection and is\nrecorded. 403 when the account may no longer hold a session, which also\nends the connection and is recorded.",
+        "operationId": "refresh_mcp_session_api_v1_auth_mcp_sessions_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpSessionRefresh"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpSessionTokens"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Mcp Session",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/mcp/sessions/{session_id}": {
+      "delete": {
+        "description": "End a connection: one's own, or anyone's with ``admin.mcp``.\n\nSomebody else's connection is 404 without that permission, the same answer\nas one that does not exist.",
+        "operationId": "revoke_mcp_session_api_v1_auth_mcp_sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Mcp Session",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/me": {
       "get": {
         "operationId": "me_api_v1_auth_me_get",
@@ -23842,7 +24262,7 @@
     },
     "/api/v1/auth/refresh": {
       "post": {
-        "description": "Issue a new short-lived access token. Re-reads role and active status from DB.",
+        "description": "Issue a new short-lived access token. Re-reads role and active status from DB.\n\nA token of an MCP connection is refused (``_refuse_mcp_connection_token``).",
         "operationId": "refresh_token_api_v1_auth_refresh_post",
         "responses": {
           "200": {
@@ -35568,6 +35988,57 @@
         ]
       }
     },
+    "/api/v1/metamodel/types/{type_key}/stakeholder-roles/order": {
+      "put": {
+        "description": "Rewrite the order of a type's stakeholder roles (#1439).\n\n``keys`` must list every role of the type exactly once, archived roles\nincluded, so a reorder can never drop or double one \u2014 the rule\n``PUT /metamodel/categories/order`` follows. Cards, the role picker and the\ninventory's stakeholder columns all read this order.",
+        "operationId": "reorder_stakeholder_roles_api_v1_metamodel_types__type_key__stakeholder_roles_order_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "type_key",
+            "required": true,
+            "schema": {
+              "title": "Type Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StakeholderRoleOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reorder Stakeholder Roles",
+        "tags": [
+          "stakeholder-roles"
+        ]
+      }
+    },
     "/api/v1/metamodel/types/{type_key}/stakeholder-roles/{role_key}": {
       "delete": {
         "description": "Permanently delete an **unused** stakeholder role.\n\nRefused (409) while anyone holds the role on a card of this type, while a\nsurvey targets it, or when it is the type's last active role \u2014 archive is the\nanswer in those cases. Deleting an in-use role would silently strip the\ncard-level permissions it grants from real users, unrecoverably, and\n``stakeholders.role`` has no foreign key to make that visible.",
@@ -40069,7 +40540,7 @@
     },
     "/api/v1/reports/dependencies": {
       "get": {
-        "description": "Dependency / interface map: nodes + edges for graph rendering.",
+        "description": "Dependency / interface map: nodes + edges for graph rendering.\n\nEvery relation is returned by default, each edge carrying its own\n``lifecycle`` when it has dates (absent means always in effect), so the\nreport can decide what a relation does at the date it travels to. With\n``in_effect_only`` the graph is the landscape today \u2014 what an impact\nanalysis asks about \u2014 and the BFS never walks a planned or ended relation.",
         "operationId": "dependencies_api_v1_reports_dependencies_get",
         "parameters": [
           {
@@ -40114,6 +40585,18 @@
                 }
               ],
               "title": "Type"
+            }
+          },
+          {
+            "description": "Drop relations not in effect today by their own lifecycle dates. Off by default: the Dependencies report travels in time and filters each edge at the travelled date from its `lifecycle`.",
+            "in": "query",
+            "name": "in_effect_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Drop relations not in effect today by their own lifecycle dates. Off by default: the Dependencies report travels in time and filters each edge at the travelled date from its `lifecycle`.",
+              "title": "In Effect Only",
+              "type": "boolean"
             }
           }
         ],

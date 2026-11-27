@@ -34,6 +34,9 @@ export interface User {
   locked_until?: string | null;
   /** Admin listing only: consecutive failed sign-ins since the last success. */
   failed_login_attempts?: number;
+  /** Admin payloads only: the role of this SSO account is set by the directory
+   *  role map at every sign-in, so the API refuses a manual role change. */
+  role_managed_externally?: boolean;
 }
 
 export interface AppRole {
@@ -116,6 +119,32 @@ export interface SsoConfig {
   proxy_logout_url?: string;
 }
 
+/** One row of the SSO directory role map: a claim value and the app role it grants. */
+export interface SsoRoleMapEntry {
+  value: string;
+  role: string;
+}
+
+/** Admin SSO settings (`GET` / `PATCH /settings/sso`). */
+export interface SsoSettings {
+  enabled: boolean;
+  provider: string;
+  client_id: string;
+  client_secret: string;
+  tenant_id: string;
+  domain: string;
+  issuer_url: string;
+  authorization_endpoint: string;
+  token_endpoint: string;
+  jwks_uri: string;
+  /** ID-token claim the role map reads (`roles`, `groups`, `cognito:groups`); "" = off. */
+  role_claim?: string;
+  /** Ordered: the first row whose value the claim carries wins. */
+  role_map?: SsoRoleMapEntry[];
+  /** Space-separated scopes added to `openid email profile` at sign-in. */
+  extra_scopes?: string;
+}
+
 export interface SsoInvitation {
   id: string;
   email: string;
@@ -133,6 +162,10 @@ export interface StakeholderRoleDef {
   /** What the role means; translated under `translations.description`. */
   description?: string | null;
   translations?: MetamodelTranslations;
+  /** Whether holding the role fills the data-quality slot. Off for passive
+   *  roles (Observer by default), which a card lists apart from the owners.
+   *  Absent means counting. */
+  counts_for_quality?: boolean;
 }
 
 /**
@@ -396,6 +429,13 @@ export interface RelationType {
   source_mandatory: boolean;
   target_visible: boolean;
   target_mandatory: boolean;
+  /**
+   * Whether card detail offers the date editor (the clock) on relations of
+   * this type. It governs ONLY the editor: dates a relation of any type
+   * carries — from an import, the API or an integration — are shown and
+   * counted regardless.
+   */
+  lifecycle_enabled?: boolean;
 }
 
 export interface TagRef {
@@ -618,6 +658,12 @@ export interface Relation {
   target?: RelationRef;
   attributes?: Record<string, unknown>;
   description?: string;
+  /**
+   * The relation's own lifecycle — the five card phases (`plan`, `phaseIn`,
+   * `active`, `phaseOut`, `endOfLife`) → `YYYY-MM-DD`. Empty or absent means
+   * always in effect. See `lib/relationLifecycle.ts`.
+   */
+  lifecycle?: Record<string, string>;
   created_at?: string;
 }
 
@@ -2612,6 +2658,12 @@ export interface PpmGanttStakeholder {
   role_key: string;
 }
 
+/** A group a PPM board row belongs to: the related card naming it (an opaque token on a portal). */
+export interface PpmGroupRef {
+  id: string;
+  name: string;
+}
+
 export interface PpmGanttItem {
   id: string;
   name: string;
@@ -2626,6 +2678,12 @@ export interface PpmGanttItem {
   capex_actual: number;
   opex_planned: number;
   opex_actual: number;
+  /**
+   * Every group the row belongs to, in board order: one per card of the
+   * grouping type it is related to now (#1452). `group_id` / `group_name`
+   * repeat the first.
+   */
+  groups?: PpmGroupRef[];
   group_id: string | null;
   group_name: string | null;
   /** Under a `subtype:<key>` grouping, the initiative that names its group (header only). */
@@ -2803,7 +2861,13 @@ export interface PpmPortfolioItem {
   parent_id?: string | null;
   start_date: string | null;
   end_date: string | null;
-  /** Opaque on the public board; a card UUID on the authenticated one. */
+  /**
+   * Every group the row belongs to, in board order — an initiative related to
+   * two cards of the grouping type is in both groups. Ids are opaque on the
+   * public board, card UUIDs on the authenticated one.
+   */
+  groups?: PpmGroupRef[];
+  /** The first of `groups`. Opaque on the public board; a card UUID on the authenticated one. */
   group_id: string | null;
   group_name: string | null;
   /**
@@ -3777,4 +3841,18 @@ export interface CommunityInstallResult extends CustomLocaleWriteResult {
   /** Strings corrected by hand that the update left as they were. */
   kept_manual: number;
   locale: CustomLocale;
+}
+
+// ── MCP connections ─────────────────────────────────────────────
+
+/** One AI tool's live connection to the MCP server (`GET /auth/mcp/sessions`). */
+export interface McpConnection {
+  id: string;
+  client_name: string;
+  created_at: string;
+  last_used_at: string;
+  /** When it ends if it is not used again: the earlier of the idle and the absolute end. */
+  expires_at: string;
+  /** Present on `?everyone=true` (admin.mcp): who signed in, never more. */
+  user?: { id: string; display_name: string };
 }

@@ -94,7 +94,7 @@ The inventory uses an **AG Grid** data table with powerful features:
 | **Lifecycle** | Current lifecycle state |
 | **Approval Status** | Review status badge |
 | **Data Quality** | Completeness percentage with visual ring |
-| **Relations** | One column per relationship, headed by its verb and the related card type (e.g. *uses IT Component*): the names of the cards linked through that relationship, listed alphabetically, with a clickable popover to add or remove relations of that relationship — cards already linked are hidden from its picker, except on a hierarchical type, where the picker shows the whole hierarchy as an indented tree and leaves those cards greyed out in place. Saved views and column layouts from before relation columns were split by relationship open with the new columns in place of the old one |
+| **Relations** | One column per relationship, headed by its verb and the related card type (e.g. *uses IT Component*): the names of the cards linked through that relationship, listed alphabetically, with a clickable popover to add or remove relations of that relationship — cards already linked are hidden from its picker, except on a hierarchical type, where the picker shows the whole hierarchy as an indented tree and leaves those cards greyed out in place. The cell, and the relation filters and their counts, show only the relations in effect today by their own [lifecycle dates](card-details.md#when-a-relation-applies); the popover lists every relation of the cell, with a chip such as *Planned · from …* or *Ended …* on one that is not in effect, so a relation that merely ended is not added again. Saved views and column layouts from before relation columns were split by relationship open with the new columns in place of the old one |
 
 **Table features:**
 
@@ -406,6 +406,8 @@ Click **Export** in the toolbar and choose one of two options:
     - **Single-type filter active** → one card sheet for that type, plus the `Relations` sheet, plus `_Meta`.
     - **No filter or multi-type filter** → one sheet per type present, plus the `Relations` sheet, plus `_Meta`. The workbook is fully editable and can be re-imported without losing per-type attributes.
 - **Export current view** — a flat, single-sheet snapshot that mirrors exactly what's on screen: only the **visible columns**, in their current **left-to-right order**, with the displayed column headers, for the **filtered rows**. Use this to share an organized view with stakeholders. This format carries no card IDs and only the columns you chose, so it is **not suitable for re-import** — use *Export all fields* when you intend to edit and re-import. If relation columns are still loading, the export waits for them, so they can never come out blank.
+
+An Excel cell holds at most 32,767 characters. When a value is longer — a very long description, or one card with around a thousand relations of one type — the export stops and names the card and the column instead of writing a broken file.
 
 ### Round-trip tips
 

@@ -605,6 +605,12 @@ async def get_card(card_id: str) -> str:
 async def get_card_relations(card_id: str) -> str:
     """Get all relations connected to a specific card.
 
+    Every relation is returned, whatever its dates. Each carries `lifecycle`:
+    its own phase dates (`plan` / `phaseIn` / `active` / `phaseOut` /
+    `endOfLife`). Empty means the relation is always in effect; otherwise it
+    is in effect from its `active` date (or from the start when it has no
+    `plan` / `phaseIn` date either) until its `endOfLife` date.
+
     Args:
         card_id: The UUID of the card.
     """
@@ -1691,6 +1697,11 @@ async def get_cost_treemap(
 async def get_capability_heatmap(metric: str = "app_count", attribution: str = "") -> str:
     """Hierarchical business-capability heatmap.
 
+    Each capability's ``app_count``, ``total_cost`` and ``risk_count`` are the
+    landscape today: they count an application only while a relation linking
+    it to the capability is in effect today. ``apps`` lists every application
+    ever linked, with the linking relations' dates in ``app_link_lifecycles``.
+
     Args:
         metric: What to colour by — 'app_count' (linked applications),
             'total_cost' (annual cost) or 'risk_count' (linked applications
@@ -2375,7 +2386,8 @@ async def analyze_impact(
 
     Walks the network of relations outward from ``card_id`` up to
     ``max_depth`` hops and returns nodes grouped by depth. Wraps the
-    existing ``GET /reports/dependencies`` BFS endpoint.
+    existing ``GET /reports/dependencies`` BFS endpoint, asking it for the
+    relations in effect today only: a planned or ended relation is not walked.
 
     Args:
         card_id: Centre node UUID.
@@ -2403,7 +2415,10 @@ async def analyze_impact(
     if not token:
         return "Error: Not authenticated. Please reconnect."
     client = TurboEAClient(token)
-    params: dict = {"center_id": card_id, "depth": max_depth}
+    # An impact analysis asks about the landscape NOW: a relation that has not
+    # started or has ended by its own dates carries no impact, and the BFS must
+    # not walk through it.
+    params: dict = {"center_id": card_id, "depth": max_depth, "in_effect_only": True}
     data = await client.get("/reports/dependencies", params=params)
     if not isinstance(data, dict):
         return _fmt(data)
@@ -5838,6 +5853,37 @@ async def resolve_card_refs(refs: list[dict]) -> str:
     return _fmt(data)
 
 
+#: The phases a relation's ``lifecycle`` may carry — a card's five.
+_RELATION_LIFECYCLE_PHASES = ("plan", "phaseIn", "active", "phaseOut", "endOfLife")
+_LIFECYCLE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(T.*)?$")
+
+
+def _relation_lifecycle_problem(lifecycle: object) -> str | None:
+    """Why an operation's ``lifecycle`` would be refused, or ``None``.
+
+    The friendly early check before any batch opens; the backend validates
+    the same rule and stays the authority (an unknown phase or an unreadable
+    date there fails the whole request)."""
+    if lifecycle is None:
+        return None
+    if not isinstance(lifecycle, dict):
+        return "lifecycle must be an object of phase → date"
+    for phase, value in lifecycle.items():
+        if phase not in _RELATION_LIFECYCLE_PHASES:
+            return (
+                f"unknown phase {phase!r} (expected one of {', '.join(_RELATION_LIFECYCLE_PHASES)})"
+            )
+        if value is None or value == "":
+            continue
+        if not isinstance(value, str) or not _LIFECYCLE_DATE.match(value):
+            return f"{phase!r} is not a date (expected YYYY-MM-DD)"
+        try:
+            date.fromisoformat(value[:10])
+        except ValueError:
+            return f"{phase!r} is not a date (expected YYYY-MM-DD)"
+    return None
+
+
 @mcp.tool(annotations=_WRITE_DESTRUCTIVE_ANNOT)
 async def upsert_relations_bulk(
     operations: list[dict],
@@ -5864,6 +5910,13 @@ async def upsert_relations_bulk(
             - `target` (dict): same shape as `source`.
             - `attributes` (dict, optional).
             - `description` (str, optional).
+            - `lifecycle` (dict, optional): the relation's own dates, the
+              same five phases a card has — `plan`, `phaseIn`, `active`,
+              `phaseOut`, `endOfLife` → "YYYY-MM-DD". A relation is in
+              effect from its `active` date until its `endOfLife` date; one
+              with only `plan` / `phaseIn` dates has not started yet. Omit
+              it to leave a stored lifecycle unchanged; a dict REPLACES the
+              stored one and `{}` clears it (always in effect).
         dry_run: When True (default), validate every op and return the
             preview without persisting. Call again with dry_run=False to
             commit.
@@ -5891,6 +5944,24 @@ async def upsert_relations_bulk(
                 ),
                 "cap": MCP_MAX_RELATIONS_PER_CALL,
                 "received": len(operations),
+            }
+        )
+    lifecycle_errors = [
+        {"row_index": op.get("row_index"), "error": problem}
+        for op in operations
+        if isinstance(op, dict)
+        and (problem := _relation_lifecycle_problem(op.get("lifecycle"))) is not None
+    ]
+    if lifecycle_errors:
+        return _fmt(
+            {
+                "error": "invalid_lifecycle",
+                "message": (
+                    "A relation lifecycle maps the phases plan, phaseIn, active, "
+                    "phaseOut and endOfLife to YYYY-MM-DD dates. Fix these rows "
+                    "and call again; nothing was sent."
+                ),
+                "rows": lifecycle_errors,
             }
         )
     if not MCP_ALLOW_RELATION_DELETE:
@@ -8514,11 +8585,13 @@ class RequireBearerForMcp:
     where to discover the OAuth metadata and initiate the flow.
 
     A bearer token that is unknown or expired gets the same 401, carrying
-    ``error="invalid_token"`` (RFC 6750 §3.1). Tokens live in this process's
-    memory, so every restart invalidates them; before this check such a token
-    reached the tools, which answered "Not authenticated" as a *result*, and a
-    client that only refreshes on a 401 — Copilot Studio's token broker — was
-    left with a dead connection it never tried to renew.
+    ``error="invalid_token"`` (RFC 6750 §3.1): an expired access token, one
+    sealed under another SECRET_KEY, or one that is not ours at all. Without
+    this check such a token reached the tools, which answered "Not
+    authenticated" as a *result*, and a client that only refreshes on a 401 —
+    Copilot Studio's token broker — was left with a dead connection it never
+    tried to renew. Access tokens are sealed, not kept in memory (see
+    ``oauth.py``), so a restart of this process does not invalidate them.
 
     The OAuth and well-known routes themselves remain public — the gate
     only fires for the protocol endpoint at ``/mcp``.
@@ -8618,8 +8691,9 @@ def create_app() -> Starlette:
     if oauth.CLIENT_KEY_IS_EPHEMERAL:
         logger.warning(
             "SECRET_KEY is not set for the MCP server: dynamically registered "
-            "OAuth clients will not survive a restart. Pass the instance's "
-            "SECRET_KEY to the mcp-server container."
+            "OAuth clients and AI tool connections will not survive a restart, "
+            "and connections will not renew. Pass the instance's SECRET_KEY to "
+            "the mcp-server container."
         )
     app = mcp.streamable_http_app()
     app.router.routes.extend(oauth_routes)
@@ -8702,6 +8776,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Largest request head (request line plus headers) uvicorn's h11 parser takes.
+# The edge nginx forwards up to four 16 KB header buffers
+# (``large_client_header_buffers 4 16k``) so a sign-in proxy's token headers
+# and cookies fit (#1445); h11's 16 KB default would refuse such a request with
+# "400 Invalid HTTP request received." before it reached the app.
+MAX_REQUEST_HEAD_BYTES = 64 * 1024
+
+
 def main():
     args = _build_parser().parse_args()
 
@@ -8716,7 +8798,13 @@ def main():
             args.host,
             args.port,
         )
-        uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
+        uvicorn.run(
+            create_app(),
+            host=args.host,
+            port=args.port,
+            log_level="info",
+            h11_max_incomplete_event_size=MAX_REQUEST_HEAD_BYTES,
+        )
 
 
 if __name__ == "__main__":

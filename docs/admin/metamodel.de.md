@@ -69,7 +69,7 @@ Felder definieren die benutzerdefinierten Attribute, die auf Karten dieses Typs 
 | **Datenqualität** | Der Beitrag jedes Felds zum Wert wird im Bereich **Datenqualität** verwaltet (siehe unten) |
 | **Nur lesen** | Verhindert manuelle Bearbeitung (nützlich für berechnete Felder) |
 
-**So werden Pflichtfelder durchgesetzt.** Beim Erstellen einer Karte sind diese Felder nie erforderlich — Karten können schnell angelegt und später vervollständigt werden. Solange ein Pflichtfeld leer ist, bleibt die Datenqualitätsbewertung der Karte bei **0**, und die Kartendetailseite zeigt ein Warnbanner mit den auszufüllenden Feldern. Beim Bearbeiten eines Kartenbereichs kann dieser erst gespeichert werden, wenn seine Pflichtfelder ausgefüllt sind, und die API lehnt das Leeren eines bereits gefüllten Pflichtfelds ab. Boolesche und schreibgeschützte (berechnete) Felder sind ausgenommen.
+**So werden Pflichtfelder durchgesetzt.** Beim Erstellen einer Karte sind diese Felder nie erforderlich — Karten können schnell angelegt und später vervollständigt werden. Solange ein Pflichtfeld leer ist, bleibt die Datenqualitätsbewertung der Karte bei **0**, und die Kartendetailseite zeigt ein Warnbanner mit den auszufüllenden Feldern. Beim Bearbeiten eines Kartenbereichs wird ein noch leeres Pflichtfeld mit einem Hinweis markiert, verhindert aber nicht das Speichern des Bereichs, sodass eine Karte Feld für Feld vervollständigt werden kann; das Leeren eines Pflichtfelds, das bereits einen Wert hat, wird sowohl im Editor als auch von der API abgelehnt. Boolesche und schreibgeschützte (berechnete) Felder sind ausgenommen.
 
 Klicken Sie auf **+ Feld hinzufügen**, um ein neues Feld zu erstellen, oder klicken Sie auf ein bestehendes Feld, um es im **Feldeditor-Dialog** zu bearbeiten.
 
@@ -143,6 +143,10 @@ Eine am Kartentyp als Pflicht markierte Beziehung gilt für jede Karte dieses Ty
 #### Stakeholder-Rollen
 
 Definieren Sie benutzerdefinierte Rollen für diesen Typ (z.B. «Anwendungseigner», «Technischer Eigner»). Jede Rolle hat **kartenebene Berechtigungen**, die beim Zugriff auf eine Karte mit der anwendungsweiten Rolle des Benutzers kombiniert werden. Siehe [Benutzer & Rollen](users.md) für mehr zum Berechtigungsmodell.
+
+Ein von Ihnen erstellter Typ startet mit zwei Rollen, **Verantwortlicher** und **Beobachter**, mit denselben Berechtigungen wie bei den integrierten Typen. Bearbeiten, archivieren oder löschen Sie sie wie jede andere Rolle. Wenn Sie eigene Rollen hinzufügen, bleiben sie erhalten.
+
+Verwenden Sie die Pfeile **nach oben** und **nach unten** an einer Rolle, um ihre Position in der Liste zu ändern. Der Tab **Stakeholder** einer Karte und die Rollenauswahl zeigen die Rollen in dieser Reihenfolge. Rollen, die nicht zur Datenqualität zählen (siehe **Zählt für die Datenqualität** weiter unten), stehen auf einer Karte immer zuletzt unter **Diese Karte verfolgen**, damit Personen, die eine Karte nur verfolgen, nie für ihre Verantwortlichen gehalten werden.
 
 Jede Rolle hat einen **Schlüssel** (die auf Karten gespeicherte Kennung, die auch von den `stakeholder:<Rollenschlüssel>`-Import-/Exportspalten verwendet wird) und eine **Bezeichnung** (was Benutzer sehen). Der Schlüssel folgt derselben Konvention wie jeder andere Metamodell-Schlüssel — nur Buchstaben und Ziffern, beginnend mit einem Buchstaben, 3–50 Zeichen, üblicherweise camelCase wie `businessArchitect`. Er wird automatisch aus der Bezeichnung abgeleitet, sodass Sie ihn selten selbst eingeben müssen.
 
@@ -220,7 +224,7 @@ Klicken Sie auf die Schaltfläche **Übersetzen** in der Symbolleiste des Typ-Dr
 - **Integrierte Typen** werden weich gelöscht (ausgeblendet) und können wiederhergestellt werden. Die Löschen-Schaltfläche im Typ-Editor ist für sie gesperrt — verwenden Sie stattdessen **Typ ausblenden**.
 - **Benutzerdefinierte Typen** — die von Ihnen erstellten — können **dauerhaft gelöscht** werden. Öffnen Sie den Typ, klicken Sie in der Kopfzeile auf **Typ löschen**, und Turbo EA zeigt alles an, was mit der Löschung entfernt wird: die Karten des Typs (mit ihren Beziehungen, Stakeholdern, Kommentaren und Anhängen), die Beziehungstypen, die ihn mit anderen Typen verbinden, die Berechnungen für diesen Typ und seine Stakeholder-Rollen. Geben Sie den Schlüssel des Typs ein, um **Dauerhaft löschen** freizugeben. Die Löschung kann nicht rückgängig gemacht werden; archivierte Karten des Typs werden ebenfalls gelöscht, und jede gelöschte Karte wird im Sicherheits- und Admin-Protokoll sowie im Ereignisverlauf festgehalten.
 
-## Beziehungstypen
+## Beziehungstypen {: #relation-types }
 
 Beziehungstypen definieren die zulässigen Verbindungen zwischen Kartentypen. Jeder Beziehungstyp spezifiziert:
 
@@ -236,6 +240,8 @@ Beziehungstypen definieren die zulässigen Verbindungen zwischen Kartentypen. Je
 Klicken Sie auf **+ Neuer Beziehungstyp**, um eine Beziehung zu erstellen, oder klicken Sie auf einen bestehenden, um dessen Bezeichnungen und Attribute zu bearbeiten.
 
 Jede Beziehungszeile trägt außerdem die Schalter **Sichtbar** und **Pflichtfeld** für *jedes* ihrer beiden Enden, benannt nach dem Kartentyp, für den sie gelten: Sichtbar entscheidet, ob die Beziehung auf der Kartendetailseite dieses Typs erscheint, Pflichtfeld, ob sie ausgefüllt werden muss. Ein Beziehungstyp, dessen beide Enden derselbe Kartentyp sind, erhält je Richtung ein eigenes Schalterpaar, sodass die eingehende Seite getrennt von der ausgehenden konfiguriert werden kann.
+
+Aktivieren Sie **Lebenszyklus verfolgen** im Erstellen- oder Bearbeiten-Dialog eines Beziehungstyps – auch bei eingebauten Typen –, um Beziehungen dieses Typs einen eigenen Lebenszyklus zu geben – die fünf Phasen des Karten-Lebenszyklus –, sodass eine Beziehung unabhängig von den beiden verbundenen Karten geplant, aktiv oder beendet sein kann. Auf der Kartendetailseite setzt oder löscht eine Uhr an jeder Beziehung dieses Typs ihre Daten. So bilden Sie zum Beispiel dieselbe Anwendung ab, die mehrere Organisationen ab unterschiedlichen Zeitpunkten nutzen: eine Beziehung pro Organisation, jede mit eigenem Zeitraum. Eine geplante oder beendete Beziehung zählt in Berichten, Flags, berechneten Feldern und dem Datenqualitäts-Score nicht mehr mit, bleibt aber auf der Karte aufgeführt (siehe [Wann eine Beziehung gilt](../guide/card-details.md#when-a-relation-applies)). Ein Beziehungstyp mit eingeschaltetem Schalter zeigt in der Beziehungsliste einen Chip **Lebenszyklus**, sodass Sie ohne Öffnen des Dialogs sehen, welche Typen ihn verfolgen. Der Schalter entscheidet nur, ob der Lebenszyklus auf der Karte bearbeitet werden kann: Daten, die eine Beziehung bereits trägt – aus einem Import, der API oder einer Erweiterung –, werden unabhängig davon angezeigt und gezählt, und das Ausschalten löscht keine Daten. Ein Kartenpaar hat pro Beziehungstyp eine Beziehung, daher hat jede Beziehung genau einen Zeitraum. Das Ändern des Schalters wird im Sicherheits- und Admin-Protokoll aufgezeichnet.
 
 Die Felder **Bezeichnung** und **Umgekehrte Bezeichnung** werden in der Sprache erfasst, die Sie gerade verwenden — die Feldbeschriftung zeigt an, welche (zum Beispiel *Bezeichnung (Deutsch)*). Beim Umbenennen einer Beziehung wird diese Sprache überall aktualisiert, wo das Verb erscheint: im Abschnitt **Beziehungen** einer Karte, in den Beziehungsspalten des Inventars, in Berichten, Portalen und Diagrammen. Andere Sprachen behalten ihre eigene Formulierung, bis Sie sie übersetzen.
 

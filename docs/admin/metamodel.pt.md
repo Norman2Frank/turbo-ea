@@ -70,7 +70,7 @@ Campos definem os atributos personalizados disponíveis nos cards deste tipo. Ca
 | **Qualidade dos dados** | A contribuição de cada campo para a pontuação é gerida no painel **Qualidade dos dados** (ver abaixo) |
 | **Somente leitura** | Impede edição manual (útil para campos calculados) |
 
-**Como os campos obrigatórios são aplicados.** Criar um cartão nunca exige esses campos — os cartões podem ser criados rapidamente e completados depois. Enquanto algum campo obrigatório estiver vazio, a pontuação de qualidade dos dados do cartão permanece em **0** e a página de detalhes mostra um aviso listando o que deve ser preenchido. Ao editar uma seção do cartão, ela não pode ser salva até que seus campos obrigatórios estejam preenchidos, e a API rejeita esvaziar um campo obrigatório que já tem valor. Campos booleanos e somente leitura (calculados) estão isentos.
+**Como os campos obrigatórios são aplicados.** Criar um cartão nunca exige esses campos — os cartões podem ser criados rapidamente e completados depois. Enquanto algum campo obrigatório estiver vazio, a pontuação de qualidade dos dados do cartão permanece em **0** e a página de detalhes mostra um aviso listando o que deve ser preenchido. Ao editar uma seção do cartão, um campo obrigatório que ainda esteja vazio é marcado com uma nota, mas não impede o salvamento da seção, de modo que um cartão pode ser completado um campo de cada vez; esvaziar um campo obrigatório que já tem valor é recusado, tanto no editor quanto pela API. Campos booleanos e somente leitura (calculados) estão isentos.
 
 Clique em **+ Adicionar Campo** para criar um novo campo, ou clique em um campo existente para editá-lo no **Diálogo de Editor de Campo**.
 
@@ -144,6 +144,10 @@ Uma relação marcada como obrigatória no tipo de card aplica-se a todos os car
 #### Papéis de Partes Interessadas
 
 Defina papéis personalizados para este tipo (ex.: "Proprietário da Aplicação", "Proprietário Técnico"). Cada papel carrega **permissões em nível de card** que são combinadas com o papel em nível de aplicação do usuário ao acessar um card. Veja [Usuários e Papéis](users.md) para mais informações sobre o modelo de permissões.
+
+Um tipo que você cria começa com dois papéis, **Responsável** e **Observador**, com as mesmas permissões que têm nos tipos integrados. Edite, arquive ou elimine-os como qualquer outro papel. Adicionar os seus próprios papéis mantém-nos.
+
+Use as setas **para cima** e **para baixo** de um papel para mudar o seu lugar na lista. O separador **Partes interessadas** de um cartão e o seletor de papéis mostram os papéis por esta ordem. Os papéis que não contam para a qualidade dos dados (veja **Conta para a qualidade dos dados** mais abaixo) vêm sempre em último lugar num cartão, em **A seguir este cartão**, para que quem apenas segue um cartão nunca seja confundido com um dos seus responsáveis.
 
 Cada papel tem uma **chave** (o identificador armazenado nos cartões, usado pelas colunas de importação/exportação `stakeholder:<chave_do_papel>`) e um **rótulo** (o que os utilizadores veem). A chave segue a mesma convenção de qualquer outra chave do metamodelo: apenas letras e dígitos, começando por uma letra, de 3 a 50 caracteres, por convenção em camelCase como `businessArchitect`. É preenchida automaticamente a partir do rótulo, pelo que raramente precisará de a escrever.
 
@@ -221,7 +225,7 @@ As traduções são armazenadas junto com cada tipo de card e são resolvidas no
 - **Tipos incorporados** são excluídos temporariamente (ocultos) e podem ser restaurados. O botão de excluir no editor de tipos fica bloqueado para eles — use **Ocultar tipo** em vez disso.
 - **Tipos personalizados** — os que você criou — podem ser **excluídos permanentemente**. Abra o tipo, clique em **Excluir tipo** no cabeçalho e o Turbo EA mostra tudo o que a exclusão levará junto: os cards do tipo (com seus relacionamentos, stakeholders, comentários e anexos), os tipos de relacionamento que o ligam a outros tipos, os cálculos direcionados a ele e seus papéis de stakeholder. Digite a chave do tipo para liberar **Excluir permanentemente**. A exclusão não pode ser desfeita; os cards arquivados do tipo também são excluídos, e cada card excluído fica registrado no log de segurança e administração e no histórico de eventos.
 
-## Tipos de Relacionamento
+## Tipos de Relacionamento {: #relation-types }
 
 Tipos de relacionamento definem as conexões permitidas entre tipos de card. Cada tipo de relacionamento especifica:
 
@@ -237,6 +241,8 @@ Tipos de relacionamento definem as conexões permitidas entre tipos de card. Cad
 Clique em **+ Novo Tipo de Relacionamento** para criar um relacionamento, ou clique em um existente para editar seus rótulos e atributos.
 
 Cada linha de relação tem ainda os interruptores **Visível** e **Obrigatório** para *cada* uma das suas duas extremidades, indicando o tipo de card a que se aplicam: Visível decide se a relação aparece na página de detalhe desse tipo, Obrigatório se tem de ser preenchida. Um tipo de relação cujas duas extremidades são o mesmo card recebe um par de interruptores por direção, pelo que o lado de entrada se configura separadamente do de saída.
+
+Ative **Acompanhar o ciclo de vida** na caixa de diálogo de criação ou edição de um tipo de relação — incluindo os tipos integrados — para dar às relações desse tipo o seu próprio ciclo de vida — as cinco fases do ciclo de vida de um card — para que uma relação possa estar planeada, ativa ou terminada independentemente dos dois cards que liga. No detalhe do card, um relógio em cada relação desse tipo define ou limpa as suas datas. É assim que se modela, por exemplo, a mesma aplicação usada por várias organizações a partir de datas diferentes: uma relação por organização, cada uma com o seu próprio período. Uma relação planeada ou terminada deixa de contar nos relatórios, nos indicadores, nos campos calculados e na pontuação de qualidade dos dados, mas continua listada no card (ver [Quando uma relação se aplica](../guide/card-details.md#when-a-relation-applies)). Um tipo de relação com o interruptor ativo mostra um chip **Ciclo de vida** na lista de relações, para que veja que tipos o acompanham sem abrir a caixa de diálogo. O interruptor só decide se o ciclo de vida pode ser editado no card: as datas que uma relação já tem — de uma importação, da API ou de uma extensão — são mostradas e contadas independentemente dele, e desativá-lo não apaga nenhuma data. Um par de cards tem uma relação por tipo de relação, pelo que cada relação tem um único período. A alteração do interruptor fica registada no registo de segurança e administração.
 
 Os campos **Rótulo** e **Rótulo Inverso** são escritos no idioma que está a utilizar no momento — a legenda do campo indica qual (por exemplo, *Rótulo (Português)*). Renomear uma relação atualiza esse idioma em todos os locais onde o verbo aparece: a secção **Relações** de um card, as colunas de relação do inventário, os relatórios, os portais e os diagramas. Os restantes idiomas mantêm a sua própria redação até que os traduza.
 

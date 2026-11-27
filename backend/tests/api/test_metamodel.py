@@ -11,8 +11,14 @@ import json
 import pytest
 from sqlalchemy import select
 
-from app.core.permissions import VIEWER_PERMISSIONS
+from app.core.permissions import (
+    OBSERVER_CARD_PERMISSIONS,
+    RESPONSIBLE_CARD_PERMISSIONS,
+    VIEWER_PERMISSIONS,
+)
 from app.models.card_type import CardType
+from app.models.stakeholder import Stakeholder
+from app.models.stakeholder_role_definition import StakeholderRoleDefinition
 from tests.conftest import (
     auth_headers,
     create_card,
@@ -95,6 +101,141 @@ class TestCreateType:
         role_keys = [r["key"] for r in data["stakeholder_roles"]]
         assert "responsible" in role_keys
         assert "observer" in role_keys
+
+    async def test_new_type_defines_its_default_roles(self, client, db, metamodel_env):
+        # #1437: the defaults were stored in the legacy JSONB list only, so they
+        # had no definition row — no permissions, and gone once a role was added.
+        admin = metamodel_env["admin"]
+        r = await client.post(
+            "/api/v1/metamodel/types",
+            json={"key": "CustomWidget", "label": "Custom Widget"},
+            headers=auth_headers(admin),
+        )
+        assert r.status_code == 201, r.text
+        rows = (
+            (
+                await db.execute(
+                    select(StakeholderRoleDefinition)
+                    .where(StakeholderRoleDefinition.card_type_key == "CustomWidget")
+                    .order_by(StakeholderRoleDefinition.sort_order)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [(s.key, s.label, s.sort_order) for s in rows] == [
+            ("responsible", "Responsible", 0),
+            ("observer", "Observer", 1),
+        ]
+        by_key = {s.key: s for s in rows}
+        assert by_key["responsible"].permissions == RESPONSIBLE_CARD_PERMISSIONS
+        assert by_key["observer"].permissions == OBSERVER_CARD_PERMISSIONS
+        assert by_key["responsible"].counts_for_quality is True
+        assert by_key["observer"].counts_for_quality is False
+
+    async def test_adding_a_role_keeps_the_defaults(self, client, db, metamodel_env):
+        admin = metamodel_env["admin"]
+        r = await client.post(
+            "/api/v1/metamodel/types",
+            json={"key": "CustomWidget", "label": "Custom Widget"},
+            headers=auth_headers(admin),
+        )
+        assert r.status_code == 201, r.text
+        r = await client.post(
+            "/api/v1/metamodel/types/CustomWidget/stakeholder-roles",
+            json={"key": "dataSteward", "label": "Data Steward", "permissions": {}},
+            headers=auth_headers(admin),
+        )
+        assert r.status_code == 201, r.text
+
+        picker = await client.get(
+            "/api/v1/stakeholder-roles?type_key=CustomWidget", headers=auth_headers(admin)
+        )
+        assert picker.status_code == 200
+        assert [x["key"] for x in picker.json()] == ["responsible", "observer", "dataSteward"]
+        admin_list = await client.get(
+            "/api/v1/metamodel/types/CustomWidget/stakeholder-roles",
+            headers=auth_headers(admin),
+        )
+        assert [x["key"] for x in admin_list.json()] == [
+            "responsible",
+            "observer",
+            "dataSteward",
+        ]
+
+    async def test_a_responsible_on_a_new_type_can_edit(self, client, db, metamodel_env):
+        admin = metamodel_env["admin"]
+        r = await client.post(
+            "/api/v1/metamodel/types",
+            json={"key": "CustomWidget", "label": "Custom Widget"},
+            headers=auth_headers(admin),
+        )
+        assert r.status_code == 201, r.text
+        viewer = metamodel_env["viewer"]
+        card = await create_card(db, card_type="CustomWidget", name="W1", user_id=admin.id)
+        db.add(Stakeholder(card_id=card.id, user_id=viewer.id, role="responsible"))
+        await db.flush()
+
+        r = await client.get(
+            f"/api/v1/cards/{card.id}/my-permissions", headers=auth_headers(viewer)
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["stakeholder_roles"] == ["responsible"]
+        assert body["effective"]["can_edit"] is True
+
+    async def test_named_roles_are_defined_and_bad_entries_skipped(self, client, db, metamodel_env):
+        admin = metamodel_env["admin"]
+        r = await client.post(
+            "/api/v1/metamodel/types",
+            json={
+                "key": "CustomWidget",
+                "label": "Custom Widget",
+                "stakeholder_roles": [
+                    {"key": "owner", "label": "Owner"},
+                    {"key": "owner", "label": "Twice"},
+                    {"label": "No key"},
+                    "observer",
+                    {"key": "x" * 51},
+                    {"key": "steward", "label": "  "},
+                ],
+            },
+            headers=auth_headers(admin),
+        )
+        assert r.status_code == 201, r.text
+        rows = (
+            (
+                await db.execute(
+                    select(StakeholderRoleDefinition).where(
+                        StakeholderRoleDefinition.card_type_key == "CustomWidget"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # An unknown key starts with no permissions, for the admin to tick.
+        assert {(s.key, s.label, json.dumps(s.permissions)) for s in rows} == {
+            ("owner", "Owner", "{}"),
+            ("steward", "steward", "{}"),
+        }
+
+    async def test_an_empty_role_list_gets_the_defaults(self, client, db, metamodel_env):
+        admin = metamodel_env["admin"]
+        r = await client.post(
+            "/api/v1/metamodel/types",
+            json={"key": "CustomWidget", "label": "Custom Widget", "stakeholder_roles": []},
+            headers=auth_headers(admin),
+        )
+        assert r.status_code == 201, r.text
+        keys = (
+            await db.execute(
+                select(StakeholderRoleDefinition.key).where(
+                    StakeholderRoleDefinition.card_type_key == "CustomWidget"
+                )
+            )
+        ).scalars()
+        assert set(keys) == {"responsible", "observer"}
 
     async def test_duplicate_key_rejected(self, client, db, metamodel_env):
         admin = metamodel_env["admin"]
@@ -2328,7 +2469,8 @@ class TestMetamodelAudit:
                 "relation_count": 0,
                 "relation_types_removed": ["depends on"],
                 "calculation_count": 0,
-                "stakeholder_role_count": 0,
+                # Responsible and Observer, defined when the type was created (#1437).
+                "stakeholder_role_count": 2,
             }
         }
 
@@ -3119,3 +3261,153 @@ class TestAuditHelpers:
         assert len(items) == 201
         assert items[0] == {"kind": "subtype.added", "label": "S0"}
         assert items[-1] == {"kind": "more", "count": 5}
+
+
+# ---------------------------------------------------------------------------
+# Relation types — the lifecycle editor switch
+# ---------------------------------------------------------------------------
+
+
+class TestRelationTypeLifecycleSwitch:
+    """``lifecycle_enabled`` decides only whether the UI offers the relation
+    date editor. It is off by default and never locked, built-ins included."""
+
+    async def _types(self, db):
+        await create_card_type(db, key="Organization", label="Organization")
+        await create_card_type(db, key="Application", label="Application")
+
+    async def test_off_by_default_and_settable_on_create(self, client, db, metamodel_env):
+        await self._types(db)
+        admin = metamodel_env["admin"]
+        plain = await client.post(
+            "/api/v1/metamodel/relation-types",
+            json={
+                "key": "orgUsesApp",
+                "label": "uses",
+                "source_type_key": "Organization",
+                "target_type_key": "Application",
+            },
+            headers=auth_headers(admin),
+        )
+        assert plain.status_code == 201
+        assert plain.json()["lifecycle_enabled"] is False
+        dated = await client.post(
+            "/api/v1/metamodel/relation-types",
+            json={
+                "key": "orgRunsApp",
+                "label": "runs",
+                "source_type_key": "Organization",
+                "target_type_key": "Application",
+                "lifecycle_enabled": True,
+            },
+            headers=auth_headers(admin),
+        )
+        assert dated.status_code == 201
+        assert dated.json()["lifecycle_enabled"] is True
+        listing = await client.get("/api/v1/metamodel/relation-types", headers=auth_headers(admin))
+        by_key = {r["key"]: r["lifecycle_enabled"] for r in listing.json()}
+        assert by_key == {"orgUsesApp": False, "orgRunsApp": True}
+
+    async def test_an_admin_can_toggle_it_on_a_built_in_type(self, client, db, metamodel_env):
+        await self._types(db)
+        await create_relation_type(
+            db,
+            key="relOrgToApp",
+            source_type_key="Organization",
+            target_type_key="Application",
+            built_in=True,
+        )
+        admin = metamodel_env["admin"]
+        on = await client.patch(
+            "/api/v1/metamodel/relation-types/relOrgToApp",
+            json={"lifecycle_enabled": True},
+            headers=auth_headers(admin),
+        )
+        assert on.status_code == 200, on.text
+        assert on.json()["lifecycle_enabled"] is True
+        assert on.json()["built_in"] is True
+        fetched = await client.get(
+            "/api/v1/metamodel/relation-types/relOrgToApp", headers=auth_headers(admin)
+        )
+        assert fetched.json()["lifecycle_enabled"] is True
+        off = await client.patch(
+            "/api/v1/metamodel/relation-types/relOrgToApp",
+            json={"lifecycle_enabled": False},
+            headers=auth_headers(admin),
+        )
+        assert off.json()["lifecycle_enabled"] is False
+
+    async def test_the_toggle_is_audited(self, client, db, metamodel_env):
+        await self._types(db)
+        await create_relation_type(
+            db, key="relAudit", source_type_key="Organization", target_type_key="Application"
+        )
+        resp = await client.patch(
+            "/api/v1/metamodel/relation-types/relAudit",
+            json={"lifecycle_enabled": True},
+            headers=auth_headers(metamodel_env["admin"]),
+        )
+        assert resp.status_code == 200
+        [row] = await _audit_rows(db, "admin.metamodel.relation_type.updated")
+        assert row.details == {"changes": {"lifecycle_enabled": {"old": False, "new": True}}}
+
+    @pytest.mark.parametrize("value", ["yes", 1, None])
+    async def test_only_a_boolean_is_accepted(self, client, db, metamodel_env, value):
+        await self._types(db)
+        await create_relation_type(
+            db, key="relStrict", source_type_key="Organization", target_type_key="Application"
+        )
+        resp = await client.patch(
+            "/api/v1/metamodel/relation-types/relStrict",
+            json={"lifecycle_enabled": value},
+            headers=auth_headers(metamodel_env["admin"]),
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "lifecycle_enabled must be a boolean"
+        created = await client.post(
+            "/api/v1/metamodel/relation-types",
+            json={
+                "key": "relStrictNew",
+                "label": "x",
+                "source_type_key": "Organization",
+                "target_type_key": "Application",
+                "lifecycle_enabled": value,
+            },
+            headers=auth_headers(metamodel_env["admin"]),
+        )
+        assert created.status_code == 400
+        assert created.json()["detail"] == "lifecycle_enabled must be a boolean"
+
+    async def test_a_viewer_cannot_toggle_it(self, client, db, metamodel_env):
+        await self._types(db)
+        await create_relation_type(
+            db, key="relLocked", source_type_key="Organization", target_type_key="Application"
+        )
+        resp = await client.patch(
+            "/api/v1/metamodel/relation-types/relLocked",
+            json={"lifecycle_enabled": True},
+            headers=auth_headers(metamodel_env["viewer"]),
+        )
+        assert resp.status_code == 403
+
+    async def test_the_switch_does_not_gate_the_api(self, client, db, metamodel_env):
+        """Dates on a relation of a type with the switch off are accepted and
+        stored: the switch only decides whether the UI offers the editor."""
+        await self._types(db)
+        await create_relation_type(
+            db, key="relOff", source_type_key="Organization", target_type_key="Application"
+        )
+        org = await create_card(db, card_type="Organization", name="Org")
+        app = await create_card(db, card_type="Application", name="App")
+        resp = await client.post(
+            "/api/v1/relations",
+            json={
+                "type": "relOff",
+                "source_id": str(org.id),
+                "target_id": str(app.id),
+                "lifecycle": {"active": "2027-01-01"},
+            },
+            headers=auth_headers(metamodel_env["admin"]),
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["lifecycle"] == {"active": "2027-01-01"}

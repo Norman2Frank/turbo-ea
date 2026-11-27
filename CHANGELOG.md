@@ -5,6 +5,81 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.219.2] - 2026-11-27
+
+### Fixed
+- The PPM portfolio board, grouped by a related card type, lists an initiative under every card it is related to — an initiative related to two Applications appears in both groups, matching the Applications' own Relations — where it showed under only one ([#1452](https://github.com/vincentmakes/turbo-ea/issues/1452)).
+
+## [2.219.1] - 2026-11-27
+
+### Fixed
+- A card section with several empty required fields can be saved after filling only some of them: a required field that is still empty now carries a note instead of blocking Save, and only emptying a required field that already has a value is refused ([#1451](https://github.com/vincentmakes/turbo-ea/issues/1451)).
+
+## [2.219.0] - 2026-11-27
+
+### Added
+- **Active connections** in Admin → Settings → AI → MCP Integration lists every AI tool signed in to the MCP server, with its person and when it connected, was last used and ends, and lets an administrator revoke any of them ([#1449](https://github.com/vincentmakes/turbo-ea/issues/1449)).
+- Two backend settings, `MCP_SESSION_IDLE_DAYS` (default 30) and `MCP_SESSION_MAX_DAYS` (default 180, `0` = no limit), set how long an AI tool's connection may stay unused and how long it may last at most (#1449).
+- The Security & admin log records an AI tool connecting, a connection being revoked, and a reused MCP refresh token (#1449).
+
+### Changed
+- AI tool connections to the MCP server, Copilot Studio and Claude included, now survive MCP container restarts and upgrades and renew themselves while they are used at least once every 30 days, instead of having to be recreated (#1449).
+- **After upgrading, reconnect each existing AI tool connection once** (in Copilot Studio, recreate the connection); connections made from this version on are kept (#1449).
+
+### Security
+- MCP refresh tokens are rotated on every use, and a replaced refresh token that is presented again ends the connection at once and is logged (#1449).
+- An AI tool's access stops at once when its connection is revoked or the person's account is disabled or expires (#1449).
+
+## [2.218.0] - 2026-11-26
+
+### Added
+- **Native SSO sign-in can take each user's role from the identity provider's groups or app roles**: set a claim name, an ordered list of directory values and the roles they grant, and any additional scopes in Admin → Settings → Authentication ([#1446](https://github.com/vincentmakes/turbo-ea/discussions/1446)).
+
+### Changed
+- A directory role map, for SSO or reverse-proxy sign-in, never demotes the last active administrator.
+- While a role map is in force, the role of an SSO user is locked in Admin → Users, instead of being silently replaced at the next sign-in; a bulk role change skips those accounts and an Excel import leaves their role as it is, and both say so.
+- The MCP server's sign-in requests the scopes configured for SSO.
+
+### Fixed
+- A reverse-proxy sign-in that is refused (disabled or expired account) no longer changes that account's role first.
+
+## [2.217.1] - 2026-11-26
+
+### Fixed
+- Inventory **Export → All fields**, and other requests that send a long list of cards, no longer fail behind a sign-in proxy that adds large headers, such as Azure App Service authentication (#1445).
+- An Inventory export that fails now says why, instead of producing no file and no message (#1445).
+- An Inventory export that cannot be written because one value is longer than an Excel cell allows (32,767 characters) now names the card and the column (#1445).
+- The MCP server accepts the large request headers a sign-in proxy adds, instead of answering 400 (#1445).
+
+## [2.217.0] - 2026-11-26
+
+### Added
+- Relations can carry their own lifecycle dates — the five card phases — to record when a relation is planned, in effect and ended, for example one application adopted by several organisations at different times.
+- A **Track lifecycle** switch on each relation type (Admin → Metamodel, built-in types included) gives relations of that type their own lifecycle; a clock on each relation in a card's Relations section sets or clears its dates, and relation types that track it show a Lifecycle chip in the list.
+- A relation row shows a chip when its dates say something — *Planned · from …*, *Until …* or *Ended …* — and ended relations are tucked behind a **Show ended** toggle in each group.
+- The LeanIX import keeps a relation's active-from and active-until dates.
+- Workspace transfer exports and imports relation dates and the Track lifecycle switch.
+
+### Changed
+- A relation that is planned or has ended no longer counts in reports, dashboards, the orphaned flag, calculated fields or the data-quality score; a mandatory relation met only by planned or ended relations is flagged as missing. Cards are refreshed overnight when a relation's start or end date arrives.
+- A card's History shows a change to a relation's dates or attributes under the relation it belongs to.
+- Expanding a card on a diagram draws only the relations in effect today, matching the counts in the expand menu.
+- Time travel follows a relation's own dates: in the Dependencies report a card reached from the centred card only through relations not in effect at the selected date is treated as a planned or retired card — hidden, or ghosted and badged when **Preview planned cards** or **Persist retired cards** is on — the Portfolio report groups and filters applications by the relations in effect at that date, and the Capability Map places an application under a capability only while their link is in effect and matches its relation filters through the relations in effect at that date.
+- The time-travel slider marks the dates on which relations start or end: in the Dependencies report a relation that brings a card into the centred view, or takes the last one away, is marked and named as that card going live or retiring, and only a link starting or ending between two cards that both stay shows a gained or lost connection.
+- The Layered Dependency View draws a relation that has not started or has ended in a faded style of its own and names its dates on hover; a card's Dependencies section shows only the relations in effect today.
+- The inventory's relation cells and relation filters show only relations in effect today; a cell's edit popover still lists every relation, with its phase.
+- The PPM board's and the Lifecycle report's filters, the MCP impact analysis and the capability heatmap's counts and costs for AI assistants follow only the relations in effect today. "Today" is the UTC day everywhere, in the browser as on the server.
+
+## [2.216.0] - 2026-11-26
+
+### Added
+- Stakeholder roles can be reordered with up and down arrows in the card type editor; a card's Stakeholders tab and the role picker follow that order.
+- On a card's Stakeholders tab, roles that don't count toward data quality (Observer by default) now come last under **Following this card**, apart from the card's owners.
+
+### Fixed
+- Adding a stakeholder role to a card type you created no longer hides its **Responsible** and **Observer** roles and the people assigned to them; on upgrade, the roles and assignments that had disappeared come back.
+- A **Responsible** or **Observer** on a card of a type you created now gets that role's permissions, as on the built-in types.
+
 ## [2.215.2] - 2026-11-26
 
 ### Fixed
@@ -17,6 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 - The frontend and edge nginx images now run **nginx 1.30.8**, which fixes CVE-2026-132779 (excessive CPU usage in TLS 1.3 when `ssl_early_data` is on). Turbo EA's nginx configuration does not switch that setting on, so no installation was exposed; the normal upgrade is enough.
+
 ## [2.215.0] - 2026-11-26
 
 ### Added

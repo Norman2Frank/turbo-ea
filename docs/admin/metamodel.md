@@ -69,7 +69,7 @@ Fields define the custom attributes available on cards of this type. Each field 
 | **Data quality** | Each field's contribution to the score is managed in the **Data quality** panel — see [Data quality scoring](#data-quality-scoring) below |
 | **Read-only** | Prevents manual editing (useful for calculated fields) |
 
-**How Required is enforced.** Creating a card never requires these fields — cards can be created quickly and completed later. While any required field is still empty, the card's data-quality score is pinned to **0** and the card detail page shows a warning banner listing what must be filled. When a card section is edited, it cannot be saved until the required fields in it are filled, and the API rejects clearing a required field that already has a value. Boolean and read-only (calculated) fields are exempt.
+**How Required is enforced.** Creating a card never requires these fields — cards can be created quickly and completed later. While any required field is still empty, the card's data-quality score is pinned to **0** and the card detail page shows a warning banner listing what must be filled. When a card section is edited, a required field that is still empty is marked with a note but does not stop the section from being saved, so a card can be completed one field at a time; emptying a required field that already has a value is refused, both in the editor and by the API. Boolean and read-only (calculated) fields are exempt.
 
 Click **+ Add Field** to create a new field, or click an existing field to edit it in the **Field Editor Dialog**.
 
@@ -145,6 +145,10 @@ A relation marked mandatory on the card type applies to every card of that type.
 #### Stakeholder Roles
 
 Define custom roles for this type (e.g., "Application Owner", "Technical Owner"). Each role carries **card-level permissions** that are combined with the user's app-level role when accessing a card. See [Users & Roles](users.md) for more on the permission model.
+
+A type you create starts with two roles, **Responsible** and **Observer**, with the same permissions they have on the built-in types. Edit, archive or delete them like any other role. Adding your own roles keeps them.
+
+Use the **up** and **down** arrows on a role to change its place in the list. A card's **Stakeholders** tab and the role picker show the roles in this order. Roles that don't count toward data quality (see **Counts toward data quality** below) always come last on a card, under **Following this card**, so the people who only follow a card are never mistaken for its owners.
 
 Each role has a **key** (the identifier stored on cards, used by the `stakeholder:<role_key>` import/export columns) and a **label** (what users see). The key follows the same convention as every other metamodel key — letters and digits only, starting with a letter, 3–50 characters, conventionally camelCase such as `businessArchitect`. It is filled in automatically from the label, so you rarely need to type one.
 
@@ -238,6 +242,8 @@ Relation types define the allowed connections between card types. Each relation 
 Click **+ New Relation Type** to create a relation, or click an existing one to edit its labels and attributes.
 
 Each relation row also carries **Visible** and **Mandatory** switches for *each* of its two ends, naming the card type they apply to: Visible decides whether the relation shows on that type's card detail page, Mandatory whether it must be filled in. A relation type whose two ends are the same card type gets one pair of switches per direction, so the incoming side can be configured separately from the outgoing one.
+
+Switch on **Track lifecycle** in a relation type's create or edit dialog — built-in types included — to give relations of that type their own lifecycle — the card lifecycle's five phases — so a relation can be planned, active or ended independently of the two cards it connects. On card detail, a clock on each relation of that type sets or clears its dates. This is how you model, for example, the same application used by several organisations from different dates: one relation per organisation, each with its own period. A relation that is planned or has ended no longer counts in reports, flags, calculated fields and the data-quality score, but stays listed on the card (see [When a relation applies](../guide/card-details.md#when-a-relation-applies)). A relation type with the switch on shows a **Lifecycle** chip in the relation list, so you can see which types track it without opening the dialog. The switch only decides whether the lifecycle can be edited on the card: dates a relation already carries — from an import, the API or an extension — are shown and counted whatever it says, and switching it off deletes no dates. A pair of cards has one relation per relation type, so each relation has a single period. Changing the switch is recorded in the Security & admin log.
 
 The **Label** and **Reverse Label** fields are written in the language you are currently using — the field caption shows which one (for example *Label (English)*). Renaming a relation updates that language everywhere the verb appears: the **Relations** section on a card, the inventory relation columns, reports, portals and diagrams. Other languages keep their own wording until you translate them.
 

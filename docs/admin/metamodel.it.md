@@ -70,7 +70,7 @@ I campi definiscono gli attributi personalizzati disponibili sulle card di quest
 | **Qualità dei dati** | Il contributo di ciascun campo al punteggio è gestito nel pannello **Qualità dei dati** (vedi sotto) |
 | **Sola lettura** | Impedisce la modifica manuale (utile per i campi calcolati) |
 
-**Come vengono applicati i campi obbligatori.** La creazione di una scheda non richiede mai questi campi: le schede possono essere create rapidamente e completate in seguito. Finché un campo obbligatorio resta vuoto, il punteggio di qualità dei dati della scheda rimane a **0** e la pagina di dettaglio mostra un banner di avviso con i campi da compilare. Quando si modifica una sezione della scheda, non è possibile salvarla finché i suoi campi obbligatori non sono compilati, e l'API rifiuta di svuotare un campo obbligatorio già valorizzato. I campi booleani e in sola lettura (calcolati) sono esenti.
+**Come vengono applicati i campi obbligatori.** La creazione di una scheda non richiede mai questi campi: le schede possono essere create rapidamente e completate in seguito. Finché un campo obbligatorio resta vuoto, il punteggio di qualità dei dati della scheda rimane a **0** e la pagina di dettaglio mostra un banner di avviso con i campi da compilare. Quando si modifica una sezione della scheda, un campo obbligatorio ancora vuoto è contrassegnato da una nota ma non impedisce il salvataggio della sezione, così una scheda può essere completata un campo alla volta; svuotare un campo obbligatorio già valorizzato viene rifiutato, sia nell'editor sia dall'API. I campi booleani e in sola lettura (calcolati) sono esenti.
 
 Cliccate su **+ Aggiungi campo** per creare un nuovo campo, o cliccate su un campo esistente per modificarlo nella **Finestra editor campo**.
 
@@ -144,6 +144,10 @@ Una relazione contrassegnata come obbligatoria sul tipo di card vale per ogni sc
 #### Ruoli stakeholder
 
 Definite ruoli personalizzati per questo tipo (es. "Application Owner", "Technical Owner"). Ogni ruolo porta **permessi a livello di card** che vengono combinati con il ruolo a livello di applicazione dell'utente quando accede a una card. Vedi [Utenti e ruoli](users.md) per maggiori informazioni sul modello dei permessi.
+
+Un tipo che create inizia con due ruoli, **Responsabile** e **Osservatore**, con gli stessi permessi che hanno sui tipi integrati. Modificateli, archiviateli o eliminateli come qualsiasi altro ruolo. Aggiungere ruoli propri li mantiene.
+
+Usate le frecce **su** e **giù** di un ruolo per cambiarne la posizione nell'elenco. La scheda **Stakeholder** di una scheda e il selettore dei ruoli mostrano i ruoli in questo ordine. I ruoli che non contano per la qualità dei dati (vedere **Conta per la qualità dei dati** più sotto) vengono sempre per ultimi su una scheda, sotto **Seguono questa scheda**, così chi si limita a seguire una scheda non viene mai scambiato per un suo responsabile.
 
 Ogni ruolo ha una **chiave** (l'identificatore memorizzato sulle schede, usato dalle colonne di importazione/esportazione `stakeholder:<chiave_ruolo>`) e un'**etichetta** (ciò che vedono gli utenti). La chiave segue la stessa convenzione di ogni altra chiave del metamodello: solo lettere e cifre, con iniziale alfabetica, da 3 a 50 caratteri, per convenzione in camelCase come `businessArchitect`. Viene compilata automaticamente dall'etichetta, quindi raramente dovrai digitarla.
 
@@ -221,7 +225,7 @@ Le traduzioni sono memorizzate insieme a ciascun tipo di card e vengono risolte 
 - I **tipi predefiniti** vengono eliminati temporaneamente (nascosti) e possono essere ripristinati. Il pulsante di eliminazione nell'editor del tipo è bloccato per loro — usa invece **Nascondi tipo**.
 - I **tipi personalizzati** — quelli creati da te — possono essere **eliminati definitivamente**. Apri il tipo, fai clic su **Elimina tipo** nell'intestazione e Turbo EA mostra tutto ciò che l'eliminazione porterà via: le card del tipo (con relazioni, stakeholder, commenti e allegati), i tipi di relazione che lo collegano ad altri tipi, i calcoli destinati a esso e i suoi ruoli di stakeholder. Digita la chiave del tipo per sbloccare **Elimina definitivamente**. L'eliminazione non può essere annullata; vengono eliminate anche le card archiviate del tipo, e ogni card eliminata è registrata nel log di sicurezza e amministrazione e nella cronologia degli eventi.
 
-## Tipi di relazione
+## Tipi di relazione {: #relation-types }
 
 I tipi di relazione definiscono le connessioni consentite tra i tipi di card. Ogni tipo di relazione specifica:
 
@@ -237,6 +241,8 @@ I tipi di relazione definiscono le connessioni consentite tra i tipi di card. Og
 Cliccate su **+ Nuovo tipo di relazione** per creare una relazione, o cliccate su una esistente per modificare le etichette e gli attributi.
 
 Ogni riga di relazione porta inoltre gli interruttori **Visibile** e **Obbligatorio** per *ciascuna* delle due estremità, con il nome del tipo di card a cui si applicano: Visibile decide se la relazione compare nella pagina di dettaglio di quel tipo, Obbligatorio se deve essere compilata. Un tipo di relazione le cui due estremità sono la stessa card riceve una coppia di interruttori per direzione, così il lato entrante si configura separatamente da quello uscente.
+
+Attivate **Traccia il ciclo di vita** nella finestra di creazione o modifica di un tipo di relazione — compresi i tipi integrati — per dare alle relazioni di quel tipo un proprio ciclo di vita — le cinque fasi del ciclo di vita di una scheda — così che una relazione possa essere pianificata, attiva o terminata indipendentemente dalle due schede che collega. Nel dettaglio della scheda, un orologio su ogni relazione di quel tipo ne imposta o cancella le date. È così che si modella, ad esempio, la stessa applicazione usata da più organizzazioni a partire da date diverse: una relazione per organizzazione, ciascuna con il proprio periodo. Una relazione pianificata o terminata non conta più nei report, negli indicatori, nei campi calcolati e nel punteggio di qualità dei dati, ma resta elencata sulla scheda (vedi [Quando si applica una relazione](../guide/card-details.md#when-a-relation-applies)). Un tipo di relazione con l'interruttore attivo mostra un chip **Ciclo di vita** nell'elenco delle relazioni, così si vede quali tipi lo tracciano senza aprire la finestra. L'interruttore decide solo se il ciclo di vita può essere modificato sulla scheda: le date che una relazione già possiede — da un'importazione, dall'API o da un'estensione — sono mostrate e conteggiate in ogni caso, e disattivarlo non cancella alcuna data. Una coppia di schede ha una relazione per tipo di relazione, quindi ogni relazione ha un solo periodo. La modifica dell'interruttore viene registrata nel log di sicurezza e amministrazione.
 
 I campi **Etichetta** ed **Etichetta inversa** vengono scritti nella lingua che state usando in quel momento — la didascalia del campo indica quale (ad esempio *Etichetta (Italiano)*). Rinominare una relazione aggiorna quella lingua ovunque compaia il verbo: la sezione **Relazioni** di una card, le colonne di relazione dell'inventario, i report, i portali e i diagrammi. Le altre lingue mantengono la propria formulazione finché non le traducete.
 
