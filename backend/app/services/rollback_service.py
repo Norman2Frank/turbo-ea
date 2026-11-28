@@ -10,7 +10,9 @@ Inverse operations (the ``_INVERSES`` table is the single list):
 
 - ``card.created`` → hard delete the card (and clean up its relations).
 - ``card.updated`` → restore the ``old`` value of every changed field
-  from ``event.data.changes``.
+  from ``event.data.changes`` — except a PPM roll-up (``data["source"]``
+  ``ppm_rollup`` / ``ppm_cost_rollup``), which is declined: those fields are
+  calculated from the project's PPM rows, which no rollback changes.
 - ``card.archived`` / ``card.restored`` → restore / re-archive.
 - ``relation.created`` (``relation.upserted`` on older rows) → delete
   the relation.
@@ -33,7 +35,10 @@ Deliberately NOT reversed, and reported under ``unsupported_events`` so the
 caller sees the coverage before committing: **todos a person created** (a
 todo is a request to a person, and reopening or deleting one behind their
 back is not an undo), **notifications** (already delivered), ``risk.removed`` (no snapshot
-to rebuild from — deletion is a human act), and anything else whose
+to rebuild from — deletion is a human act), **PPM roll-ups of an Initiative
+card** (``card.updated`` with ``source`` ``ppm_rollup`` / ``ppm_cost_rollup``:
+restoring them would reset the project's calculated fields while the work
+packages, tasks, budgets and costs they come from stay), and anything else whose
 handler publishes no structured ``before`` state (comments, documents,
 SoAW, ADR transitions).
 
@@ -79,9 +84,9 @@ from app.models.stakeholder import Stakeholder
 from app.models.survey import Survey, SurveyResponse
 from app.models.tag import CardTag, Tag
 from app.models.todo import Todo
-from app.services import adr_service
+from app.services import adr_service, review_outcome
 from app.services.event_bus import event_bus
-from app.services.extensions import field_gate
+from app.services.extensions import field_gate, lifecycle_gate
 from app.services.mutation_batch_service import batch_to_dict, create_batch
 
 # ---------------------------------------------------------------------------
@@ -127,13 +132,40 @@ def _plan_card_restored(event: Event, data: dict) -> dict[str, Any]:
 _LEGACY_ATTR_PREFIX = "attr_"
 
 
+# ``card.updated`` sources whose change PPM calculated from its own rows
+# (``_publish_initiative_rollup`` in ``api/v1/ppm.py``). PPM rows publish no
+# event a rollback could reverse, so the card has to keep following them.
+_DERIVED_CARD_UPDATE_SOURCES = frozenset({"ppm_rollup", "ppm_cost_rollup"})
+
+_DERIVED_CARD_UPDATE_REASON = (
+    "card.updated is not reversed: the change was calculated from the project's "
+    "PPM work packages, tasks, budgets and costs, which a rollback leaves in "
+    "place; the card keeps following them."
+)
+
+
 def _plan_card_updated(event: Event, data: dict) -> dict[str, Any]:
+    if data.get("source") in _DERIVED_CARD_UPDATE_SOURCES:
+        return _unsupported(event, _DERIVED_CARD_UPDATE_REASON)
     changes = data.get("changes") or {}
-    return {
+    op = {
         "op": "restore_card_fields",
         "card_id": _card_id_of(event, data),
         "fields": {k: v.get("old") for k, v in changes.items()},
     }
+    # A maintain / release write of the data bridge (SDK 1.22) names the
+    # extension that made it: rolling such a write back restores the dates AND
+    # the claim, unblocked by that extension's own claim. Any other write —
+    # the owner's plain ``update_card`` or an ``on_behalf_of`` edit included —
+    # carries no maintainer and is restored like a foreign one, so its
+    # whole-dict lifecycle snapshot cannot revert the maintained phases.
+    maintainer = data.get("lifecycle_maintainer")
+    if not maintainer and "lifecycle_maintained" in changes and data.get("ext"):
+        # Only the two bridge calls ever write the claim column.
+        maintainer = data["ext"]
+    if maintainer:
+        op["maintainer"] = maintainer
+    return op
 
 
 def _plan_relation_created(event: Event, data: dict) -> dict[str, Any]:
@@ -518,12 +550,39 @@ async def _apply_restore_card_fields(db: AsyncSession, op: dict[str, Any]) -> di
     # UUID; everything else is set verbatim.
     legacy_attrs: dict[str, Any] = {}
     restored_attrs: dict[str, Any] | None = None
+    # Lifecycle phases an installed, licensed extension maintains keep their
+    # current dates and are reported — unless the change being undone is a
+    # maintain / release write of the extension whose claim is in force (or
+    # no claim is in force at all): then both the dates and the claim go back.
+    # The claim itself is restored only then; another extension's live claim
+    # is never replaced or wiped by rolling back an older batch.
+    current_lock = lifecycle_gate.effective_lock(card.lifecycle_maintained)
+    maintainer = op.get("maintainer")
+    # Another extension's claim in force right now, which this rollback keeps.
+    foreign_lock = current_lock if current_lock and current_lock.ext != maintainer else None
+    own_claim = foreign_lock is None
+    lifecycle_lock = None if maintainer and own_claim else current_lock
+    result = _ok(op)
     for k, v in (op.get("fields") or {}).items():
+        if k == "lifecycle_maintained":
+            if foreign_lock is not None:
+                # The display name of the extension whose claim stayed in place.
+                result["lifecycle_claim_kept"] = foreign_lock.name
+                continue
+            setattr(card, k, v)
+            continue
         if k.startswith(_LEGACY_ATTR_PREFIX):
             legacy_attrs[k[len(_LEGACY_ATTR_PREFIX) :]] = v
             continue
         if k == "attributes":
             restored_attrs = dict(v or {})
+            continue
+        if k == "lifecycle" and lifecycle_lock is not None:
+            card.lifecycle, locked_phases = lifecycle_gate.apply_lifecycle_snapshot_lock(
+                card.lifecycle, v, lifecycle_lock.phases
+            )
+            if locked_phases:
+                result["locked_phases"] = locked_phases
             continue
         if k == "parent_id" and v:
             v = uuid.UUID(v)
@@ -540,7 +599,7 @@ async def _apply_restore_card_fields(db: AsyncSession, op: dict[str, Any]) -> di
             else:
                 restored_attrs[key] = old
     if restored_attrs is None:
-        return _ok(op)
+        return result
     # A field an inactive or unlicensed extension contributed is read-only:
     # the rollback keeps its current value and reports it, restoring the rest.
     # The snapshot is the whole column, so a locked key missing from it did
@@ -550,8 +609,8 @@ async def _apply_restore_card_fields(db: AsyncSession, op: dict[str, Any]) -> di
         card.attributes, restored_attrs, locked
     )
     if skipped:
-        return {**_ok(op), "locked_fields": skipped}
-    return _ok(op)
+        return {**result, "locked_fields": skipped}
+    return result
 
 
 async def _apply_delete_relation(db: AsyncSession, op: dict[str, Any]) -> dict[str, Any]:
@@ -794,9 +853,10 @@ async def _apply_delete_adr(db: AsyncSession, op: dict[str, Any]) -> dict[str, A
     ).scalar_one_or_none()
     if adr is None:
         return _skip(op, "already_deleted")
-    if adr.status != "draft":
+    if adr.status != "draft" or review_outcome.is_closed(adr):
         # Signing is a human act on top of the draft; the draft is no
-        # longer only what the batch created.
+        # longer only what the batch created. So is a rejection or a
+        # withdrawal, which closes it (a closed draft is no plain draft).
         return _skip(op, "adr_not_draft")
     await adr_service.delete_draft(db, adr)
     return _ok(op)

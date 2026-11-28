@@ -31,6 +31,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 
 from turbo_ea_mcp import oauth
+from turbo_ea_mcp import ppm as _ppm
 from turbo_ea_mcp.api_client import CARD_IDS_CHUNK, TurboEAClient, chunked
 from turbo_ea_mcp.batches import BatchContext, mutation_batch
 from turbo_ea_mcp.config import (
@@ -42,6 +43,7 @@ from turbo_ea_mcp.config import (
     MCP_BATCH_CONFIRMATION_THRESHOLD,
     MCP_MAX_CARDS_PER_CALL,
     MCP_MAX_LOGOS_PER_CALL,
+    MCP_MAX_PPM_ROWS_PER_CALL,
     MCP_MAX_RELATIONS_PER_CALL,
     MCP_MAX_TRANSLATIONS_PER_CALL,
     MCP_PORT,
@@ -219,15 +221,28 @@ mcp = _StrictFastMCP(
 
         Architecture decisions (ADRs) have a status (draft, in_review,
         signed) and, once signed, a derived standing (scheduled, in_force,
-        amended, superseded, revoked, expired). list_adrs shows the current
+        amended, superseded, revoked, expired). A review that ended without
+        a signature leaves an outcome on the draft (changes_requested,
+        rejected, withdrawn); a rejected or withdrawn one is closed until it
+        is reopened in the web UI. list_adrs shows the current
         revision of each decision; the ones in force are
         standing="in_force,amended". revise_adr starts a signed decision's
         next revision; replacing or revoking one is a new decision
         (create_adr) with a replaces / revokes link, signed in the web UI.
 
+        Projects (PPM): an Initiative's plan is its work packages,
+        milestones, tasks and dependencies. Read it with get_ppm_plan
+        before changing it, and pass the ids it returns. Save work packages
+        (save_ppm_work_packages) before the tasks that sit in them
+        (save_ppm_tasks); milestones are work packages with is_milestone.
+        Status reports, project risks and task comments have their own
+        tools. Work packages, tasks, reports and risks are deleted in the
+        web app only; a dependency link can be removed with
+        set_ppm_dependencies.
+
         Decisions and SoAWs each have a discussion and a timeline:
-        get_document_discussion reads the threads (rejection reasons and
-        signing notes included), add_document_comment posts a plain-text
+        get_document_discussion reads the threads (rejection reasons, change
+        requests and signing notes included), add_document_comment posts a plain-text
         comment or reply, get_document_history lists what happened.
 
         Write tools default to dry_run=True: they validate and return a
@@ -340,6 +355,112 @@ def _detail(exc: httpx.HTTPStatusError) -> object:
     except Exception:  # noqa: BLE001 — a non-JSON body has no detail
         return None
     return body.get("detail") if isinstance(body, dict) else None
+
+
+_PHASE_LABELS = {
+    "plan": "Plan",
+    "phaseIn": "Phase In",
+    "active": "Active",
+    "phaseOut": "Phase Out",
+    "endOfLife": "End of Life",
+}
+
+
+def _lifecycle_maintained_refusal(
+    phases: list, extension: object, *, cards: list | None = None
+) -> dict:
+    """The tool error for a write to lifecycle phases an installed extension
+    maintains. Plain and actionable: which dates, who sets them, and that
+    nothing here can change that while the extension is active."""
+    names = [_PHASE_LABELS.get(str(p), str(p)) for p in phases] or ["lifecycle"]
+    who = f" ({extension})" if extension else ""
+    noun = "date" if len(names) == 1 else "dates"
+    verb = "is" if len(names) == 1 else "are"
+    subject = "these cards" if cards else "this card"
+    out: dict = {
+        "error": "lifecycle_maintained",
+        "message": (
+            f"The {', '.join(names)} {noun} of {subject} {verb} set automatically by "
+            f"an installed extension{who} and cannot be set by hand while it is "
+            "active. Leave those phases out of the change, or ask an administrator "
+            "to disable the extension's rule."
+        ),
+        "phases": [str(p) for p in phases],
+        "extension": extension or None,
+    }
+    if cards:
+        out["cards"] = list(cards)
+    return out
+
+
+_PHASE_ORDER = ("plan", "phaseIn", "active", "phaseOut", "endOfLife")
+
+
+def _phase_date(value: object) -> date | None:
+    """A lifecycle phase date as the backend reads it (``YYYY-MM-DD`` or an
+    ISO timestamp), else None."""
+    if not value:
+        return None
+    try:
+        text = str(value)
+        if "T" in text:
+            return datetime.fromisoformat(text).date()
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _clamp_to_maintained(lifecycle: dict, maintained: list) -> dict:
+    """Mirror of the backend's ``lifecycle_gate.clamp_to_maintained``.
+
+    Every hand-set phase with a readable date is kept in the order the
+    maintained phases set: raised to the LATEST maintained date of an earlier
+    phase, then lowered to the EARLIEST maintained date of a later phase (the
+    maintained neighbour's stored string, verbatim). The backend applies this
+    to every user write, so a preview that skips it promises a date the commit
+    will not store.
+    """
+    locked = [p for p in _PHASE_ORDER if p in set(maintained)]
+    out = dict(lifecycle)
+    # A maintained phase is never rewritten below, so its date is read once.
+    # An unreadable maintained date sets no bound.
+    dated = {p: (d, out[p]) for p in locked if (d := _phase_date(out.get(p))) is not None}
+    for idx, phase in enumerate(_PHASE_ORDER):
+        if phase in locked:
+            continue
+        mine = _phase_date(out.get(phase))
+        if mine is None:
+            continue
+        earlier = [dated[p] for p in _PHASE_ORDER[:idx] if p in dated]
+        later = [dated[p] for p in _PHASE_ORDER[idx + 1 :] if p in dated]
+        # max / min keep the first of equal dates, as the backend's strict
+        # comparisons do: the earliest phase's stored string wins a tie.
+        if earlier:
+            lower = max(earlier, key=_bound_date)
+            if mine < lower[0]:
+                out[phase] = lower[1]
+                mine = lower[0]
+        if later:
+            upper = min(later, key=_bound_date)
+            if mine > upper[0]:
+                out[phase] = upper[1]
+    return out
+
+
+def _bound_date(bound: tuple[date, object]) -> date:
+    """The date of a ``(date, stored value)`` bound in :func:`_clamp_to_maintained`."""
+    return bound[0]
+
+
+def _lifecycle_maintained_detail(exc: Exception) -> dict | None:
+    """The 403 ``lifecycle_maintained`` detail a card write was refused with,
+    else None (any other error, or a 403 for another reason)."""
+    if not isinstance(exc, httpx.HTTPStatusError) or exc.response.status_code != 403:
+        return None
+    detail = _detail(exc)
+    if isinstance(detail, dict) and detail.get("error") == "lifecycle_maintained":
+        return detail
+    return None
 
 
 def _query_rejection(exc: httpx.HTTPStatusError) -> dict | None:
@@ -909,6 +1030,35 @@ async def list_principles() -> str:
 _ADR_STANDINGS = ("scheduled", "in_force", "amended", "superseded", "revoked", "expired")
 
 
+#: How a review can end short of a signature (``review_outcome.OUTCOMES``);
+#: ``rejected`` and ``withdrawn`` close the decision until it is reopened.
+_ADR_OUTCOMES = ("changes_requested", "rejected", "withdrawn")
+
+
+def _adr_outcome_filter(outcome: str) -> tuple[str | None, dict | None]:
+    """``outcome`` as the backend's comma-separated filter, or an error.
+
+    Returns ``(value, error)`` like :func:`_adr_standing_filter`: ``value``
+    is ``None`` when nothing is filtered; ``error`` names the unknown values
+    and lists the allowed ones, as the backend's 400 ``unknown_outcome``
+    would.
+    """
+    wanted = [part.strip() for part in outcome.split(",") if part.strip()]
+    unknown = [part for part in wanted if part not in _ADR_OUTCOMES]
+    if unknown:
+        return None, {
+            "error": "unknown_outcome",
+            "values": unknown,
+            "allowed": list(_ADR_OUTCOMES),
+            "message": (
+                "outcome takes one value or a comma-separated list of: "
+                + ", ".join(_ADR_OUTCOMES)
+                + "."
+            ),
+        }
+    return (",".join(wanted) or None), None
+
+
 def _bool_param(value: bool) -> str:
     """A boolean query parameter as the backend reads it, always sent."""
     return "true" if value else "false"
@@ -945,6 +1095,8 @@ async def list_adrs(
     search: str = "",
     standing: str = "",
     include_earlier: bool = False,
+    outcome: str = "",
+    include_closed: bool = True,
 ) -> str:
     """List Architecture Decision Records (ADRs).
 
@@ -956,6 +1108,14 @@ async def list_adrs(
     decision not consolidated yet), ``superseded`` (by a later revision or a
     replacing decision), ``revoked``, ``expired`` (past ``valid_until``).
     "Which decisions are in force?" is ``standing="in_force,amended"``.
+
+    ``outcome`` is how a review ended short of a signature, ``null`` when it
+    did not: ``{kind, at, by: {id, display_name}, note}`` with ``kind``
+    ``changes_requested`` (sent back by a signatory: an editable draft),
+    ``rejected`` (rejected by a signatory) or ``withdrawn`` (withdrawn by its
+    author side). A decision with an outcome always has ``status="draft"``;
+    a rejected or withdrawn one is *closed*: locked until it is reopened in
+    the web UI. Rejecting, withdrawing and reopening are done in the web UI.
 
     A decision can have revisions: they share its reference (``ADR-012``)
     and carry ``revision_number`` 1, 2, … By default this tool lists only
@@ -982,6 +1142,10 @@ async def list_adrs(
         standing: One standing or a comma-separated list of: scheduled,
             in_force, amended, superseded, revoked, expired.
         include_earlier: Also list earlier revisions (default False).
+        outcome: One review outcome or a comma-separated list of:
+            changes_requested, rejected, withdrawn.
+        include_closed: Also list closed (rejected or withdrawn) decisions
+            (default True).
     """
     token = await _get_current_token()
     if not token:
@@ -989,6 +1153,9 @@ async def list_adrs(
     standing_value, standing_err = _adr_standing_filter(standing)
     if standing_err is not None:
         return _fmt(standing_err)
+    outcome_value, outcome_err = _adr_outcome_filter(outcome)
+    if outcome_err is not None:
+        return _fmt(outcome_err)
     client = TurboEAClient(token)
     data = await client.get(
         "/adr",
@@ -1000,6 +1167,9 @@ async def list_adrs(
                 "search": search,
                 "standing": standing_value,
                 "include_earlier": _bool_param(include_earlier),
+                "outcome": outcome_value,
+                # Sent only when it filters: the backend lists closed ones by default.
+                "include_closed": None if include_closed else "false",
             }
         ),
     )
@@ -1089,7 +1259,9 @@ def _without_diagram_thumbnails(data: object) -> object:
 
 
 @mcp.tool(annotations=_READ_ANNOT)
-async def list_soaws(initiative_id: str = "", include_earlier: bool = False) -> str:
+async def list_soaws(
+    initiative_id: str = "", include_earlier: bool = False, include_closed: bool = True
+) -> str:
     """List Statements of Architecture Work (SoAW).
 
     A signed SoAW is revised in the web UI: the revision is a new draft with
@@ -1099,9 +1271,13 @@ async def list_soaws(initiative_id: str = "", include_earlier: bool = False) -> 
     ``superseded_by`` (on an earlier revision: the current one) and
     ``open_revision`` (on the current revision: the draft in progress).
     A SoAW sent for signature (``in_review``) is locked until the signature
-    requests are recalled, and only drafts can be deleted. A rejection sends
-    the document back without changing its revision number; the reason is a
-    thread of its discussion.
+    requests are recalled, and only drafts can be deleted. A review that
+    ends without a signature leaves ``outcome`` on the draft
+    (``{kind, at, by, note}``, else ``null``): ``changes_requested`` (sent
+    back to be worked on), ``rejected`` or ``withdrawn`` (closed: locked, and
+    not deletable, until it is reopened in the web UI). None of these
+    changes the revision number; a rejection's or a change request's reason
+    is a thread of its discussion.
 
     Each SoAW has a discussion (``get_document_discussion`` and
     ``add_document_comment`` with ``document_type="soaw"``) and a timeline
@@ -1113,6 +1289,8 @@ async def list_soaws(initiative_id: str = "", include_earlier: bool = False) -> 
     Args:
         initiative_id: Filter to SoAWs linked to a specific Initiative UUID.
         include_earlier: Also list earlier revisions (default False).
+        include_closed: Also list closed (rejected or withdrawn) SoAWs
+            (default True).
     """
     token = await _get_current_token()
     if not token:
@@ -1121,7 +1299,12 @@ async def list_soaws(initiative_id: str = "", include_earlier: bool = False) -> 
     data = await client.get(
         "/soaw",
         params=_compact(
-            {"initiative_id": initiative_id, "include_earlier": _bool_param(include_earlier)}
+            {
+                "initiative_id": initiative_id,
+                "include_earlier": _bool_param(include_earlier),
+                # Sent only when it filters: the backend lists closed ones by default.
+                "include_closed": None if include_closed else "false",
+            }
         ),
     )
     return _fmt(data)
@@ -1220,7 +1403,8 @@ async def get_document_discussion(
     """Read the discussion of a decision or a SoAW: its threads and replies.
 
     A thread carries ``kind`` (``comment``; ``rejection``: a signatory's
-    rejection reason, open until resolved; ``sign_note``: the note a
+    rejection reason, open until resolved; ``change_request``: a
+    signatory's request for changes, likewise; ``sign_note``: the note a
     signatory left when signing), ``section`` (the part of the document it
     is about, or null), ``revision_id`` / ``revision_number`` (the revision
     it was started on), ``author``, ``created_at``, ``edited_at``,
@@ -1272,10 +1456,15 @@ async def get_document_history(
     the list backwards to tell the story in order. ``kind`` says what happened: ``created``,
     ``revised`` (started as the next revision), ``save`` (a draft saved with
     changes; ``baseline`` is the state before the first recorded save),
-    ``sent_for_review``, ``signature``, ``signed``, ``rejected`` (``note`` is
-    the reason), ``recalled``, ``recorded`` (recorded as decided without
-    signatures), ``restored`` (an earlier version restored; ``note`` names
-    it). ``total`` is the number of entries across all pages.
+    ``sent_for_review``, ``signature``, ``signed``, ``changes_requested``
+    (a signatory sent it back to be worked on; ``note`` is the reason),
+    ``rejected`` (``note`` is the reason; from 2.221.0 a rejection closes the
+    document, before it meant what ``changes_requested`` means now),
+    ``withdrawn`` (closed by its author side; ``note`` is the reason),
+    ``reopened`` (a closed document made a draft again), ``recalled``,
+    ``recorded`` (recorded as decided without signatures), ``restored`` (an
+    earlier version restored; ``note`` names it). ``total`` is the number of
+    entries across all pages.
 
     This is the timeline only. Opening, comparing and restoring the saved
     versions (``has_content``) is done in the web UI, for people who can
@@ -1496,9 +1685,9 @@ async def add_document_comment(
 
     Who may post: the ``adr.comment`` / ``soaw.comment`` permission, or
     being a signatory of the revision. The discussion stays open in review
-    and after signing. A signatory's rejection reason and signing note also
-    appear in the discussion (``get_document_discussion``), as threads of
-    kind ``rejection`` and ``sign_note``.
+    and after signing. A signatory's rejection reason, change request and
+    signing note also appear in the discussion (``get_document_discussion``),
+    as threads of kind ``rejection``, ``change_request`` and ``sign_note``.
 
     A posted comment cannot be undone with ``rollback_batch`` (the backend
     declines it: a posted comment may already have been read); it is
@@ -1918,6 +2107,10 @@ async def transition_card_lifecycle(
     (``/cards/{id}?tab=approval``) so a human can complete the
     transition in the UI (S8).
 
+    A lifecycle phase an installed extension maintains on the card (the
+    card's ``lifecycle_maintained``) cannot be set by hand: the tool
+    refuses it with ``error: "lifecycle_maintained"``, on the preview too.
+
     Args:
         card_id: Card UUID.
         target: One of the values above. Approvals require
@@ -1963,19 +2156,53 @@ async def transition_card_lifecycle(
             }
         )
 
-    async def _merged_lifecycle(client: TurboEAClient) -> tuple[dict, dict]:
+    async def _merged_lifecycle(
+        client: TurboEAClient,
+    ) -> tuple[dict, dict, dict, dict | None, str | None]:
         """Fetch the card's current lifecycle record and return
-        ``(before, after)`` with the target phase's date set.
+        ``(before, after, payload, refusal, note)``.
 
         ``PATCH /cards/{id}`` replaces the whole ``lifecycle`` JSONB, so
         the wrapper must merge client-side — sending only the target
         phase used to wipe every other phase date.
+
+        Phases an installed extension maintains (``lifecycle_maintained``)
+        are left OUT of ``payload``: the backend carries an absent maintained
+        phase over at its current stored value, so the write never echoes a
+        date the extension may have moved since this read. ``after`` (the
+        preview) still shows them at their stored values, and with the
+        target clamped the way the backend will clamp it to stay in order
+        with them — ``note`` says so when that moved the date.
+
+        ``refusal`` is set when an installed extension maintains the target
+        phase itself: the backend would refuse the write, so the preview says
+        so instead of promising it.
         """
         card = await client.get(f"/cards/{card_id}")
         before = dict((card.get("lifecycle") if isinstance(card, dict) else None) or {})
         after = dict(before)
-        after[target] = effective_date or datetime.now(timezone.utc).date().isoformat()
-        return before, after
+        wanted = effective_date or datetime.now(timezone.utc).date().isoformat()
+        after[target] = wanted
+        maintained = card.get("lifecycle_maintained") if isinstance(card, dict) else None
+        phases = list((maintained.get("phases") or []) if isinstance(maintained, dict) else [])
+        refusal = None
+        note = None
+        if target in phases:
+            refusal = _lifecycle_maintained_refusal(
+                [target], maintained.get("name") or maintained.get("ext")
+            )
+        elif phases:
+            after = _clamp_to_maintained(after, phases)
+            if after.get(target) != wanted:
+                note = (
+                    f"The {_PHASE_LABELS.get(target, target)} date was adjusted from "
+                    f"{wanted} to {after.get(target)} to stay in order with the dates "
+                    "an installed extension sets automatically on this card."
+                )
+        payload = {k: v for k, v in after.items() if k not in phases}
+        if target in payload:
+            payload[target] = wanted
+        return before, after, payload, refusal, note
 
     async with mutation_batch(
         token,
@@ -1993,9 +2220,18 @@ async def transition_card_lifecycle(
                     "effective_date": effective_date or None,
                 }
                 if family == "lifecycle_phase":
-                    before, after = await _merged_lifecycle(client)
+                    before, after, _payload, refusal, note = await _merged_lifecycle(client)
+                    if refusal is not None:
+                        batch.summary = {
+                            "card_id": card_id,
+                            "target": target,
+                            "status": "refused",
+                        }
+                        return _fmt({**refusal, "card_id": card_id, **_preview_fields(batch)})
                     preview["lifecycle_before"] = before
                     preview["lifecycle_after"] = after
+                    if note:
+                        preview["lifecycle_note"] = note
                 batch.summary = {"card_id": card_id, "target": target, "status": "previewed"}
                 return _fmt(
                     {"dry_run": True, "would_transition": preview, **_preview_fields(batch)}
@@ -2006,8 +2242,11 @@ async def transition_card_lifecycle(
                     f"/cards/{card_id}/approval-status?action={target}", json=None
                 )
             elif family == "lifecycle_phase":
-                _, after = await _merged_lifecycle(client)
-                data = await client.patch(f"/cards/{card_id}", json={"lifecycle": after})
+                _, _after, payload, refusal, _note = await _merged_lifecycle(client)
+                if refusal is not None:
+                    batch.summary = {"card_id": card_id, "target": target, "status": "refused"}
+                    return _fmt({**refusal, "card_id": card_id, "batch_id": batch.batch_id})
+                data = await client.patch(f"/cards/{card_id}", json={"lifecycle": payload})
             else:  # status
                 data = await client.patch(f"/cards/{card_id}", json={"status": target})
             batch.summary = {"card_id": card_id, "target": target}
@@ -2015,6 +2254,21 @@ async def transition_card_lifecycle(
                 data["batch_id"] = batch.batch_id
             return _fmt(data)
         except Exception as exc:  # noqa: BLE001
+            # A phase an extension maintains is not a missing permission: no
+            # human can complete it in the UI either, so it is a plain refusal.
+            maintained = _lifecycle_maintained_detail(exc)
+            if maintained is not None:
+                batch.summary = {"card_id": card_id, "target": target, "status": "refused"}
+                return _fmt(
+                    {
+                        **_lifecycle_maintained_refusal(
+                            maintained.get("phases") or [target],
+                            maintained.get("extension"),
+                        ),
+                        "card_id": card_id,
+                        "batch_id": batch.batch_id,
+                    }
+                )
             msg = str(exc)
             if "403" in msg or "Forbidden" in msg or "Not enough permissions" in msg:
                 batch.summary = {"card_id": card_id, "target": target, "status": "pending"}
@@ -3554,6 +3808,9 @@ async def update_cards_bulk(
             ``attributes`` is a *full replace* — supply the complete
             map of fields you want on the card after the update.
             (Backend preserves cost-typed keys the caller can't see.)
+            A ``lifecycle`` change to a phase an installed extension
+            maintains is refused (``error: "lifecycle_maintained"``,
+            with the phases and the cards), on the preview too.
         strict_attributes: When True, reject ``attributes`` keys that
             are not declared in the card type's ``fields_schema``. The
             422 lists the unknown keys and the valid key set so an LLM
@@ -3626,18 +3883,43 @@ async def update_cards_bulk(
         client = batch.client()
         aggregated_results: list[dict] = []
         any_actual: dict | None = None
+        applied_ids: list = []
         for group in by_patch.values():
             patch = dict(group["patch"])
             if strict_attributes:
                 patch["strict_attributes"] = True
-            resp = await client.patch(
-                "/cards/bulk",
-                json={"ids": group["ids"], "updates": patch, "dry_run": dry_run},
-            )
+            try:
+                resp = await client.patch(
+                    "/cards/bulk",
+                    json={"ids": group["ids"], "updates": patch, "dry_run": dry_run},
+                )
+            except httpx.HTTPStatusError as exc:
+                # Lifecycle phases an installed extension maintains: the
+                # backend refuses the whole group (a dry run too), so the
+                # preview and the commit both say which dates and cards.
+                maintained = _lifecycle_maintained_detail(exc)
+                if maintained is None:
+                    raise
+                batch.summary = {"rows": len(updates), "status": "refused"}
+                refused = {
+                    **_lifecycle_maintained_refusal(
+                        maintained.get("phases") or [],
+                        maintained.get("extension"),
+                        cards=maintained.get("cards") or group["ids"],
+                    ),
+                    "dry_run": dry_run,
+                    "batch_id": batch.batch_id,
+                }
+                if not dry_run:
+                    # Rows sharing another patch went in before this one was
+                    # refused; rollback_batch undoes them by this batch id.
+                    refused["applied_card_ids"] = applied_ids
+                return _fmt(refused)
             if isinstance(resp, dict) and dry_run:
                 aggregated_results.extend(resp.get("results", []))
             else:
                 any_actual = resp
+                applied_ids.extend(group["ids"])
         if dry_run:
             data: dict = {
                 "dry_run": True,
@@ -4754,7 +5036,9 @@ def _adr_status_error(status: str, *, create: bool) -> dict | None:
 
     A decision has three statuses (draft, in_review, signed). What a signed
     decision means today (in force, superseded, revoked, …) is its
-    ``standing``, derived by the backend and never a status."""
+    ``standing``, derived by the backend and never a status; how a review
+    ended short of a signature (changes requested, rejected, withdrawn) is
+    its ``outcome``, set in the web UI and never a status either."""
     if not status or status == "draft":
         return None
     if status == "signed":
@@ -4780,7 +5064,8 @@ def _adr_status_error(status: str, *, create: bool) -> dict | None:
             'ADR statuses are "draft", "in_review", and "signed". '
             + ('New ADRs always land in "draft".' if create else 'Only "draft" can be set here.')
             + " Standing (in force, superseded, revoked, …) is derived from signed "
-            "decisions and their links, never set."
+            "decisions and their links, never set. A rejected or withdrawn decision "
+            "is a draft with an outcome, set in the web UI."
         ),
     }
 
@@ -4986,8 +5271,9 @@ def _adr_edit_refusal(exc: httpx.HTTPStatusError) -> dict | None:
     """The answer to a 403 from ``PATCH /adr/{id}``, else None.
 
     The backend refuses any edit of a signed decision and any edit but the
-    linked cards and diagrams of a decision in review; any other 403 is the caller's
-    missing ``adr.manage`` permission."""
+    linked cards and diagrams of a decision in review or closed (rejected or
+    withdrawn); any other 403 is the caller's missing ``adr.manage``
+    permission."""
     if exc.response.status_code != 403:
         return None
     detail = _detail(exc)
@@ -4999,6 +5285,16 @@ def _adr_edit_refusal(exc: httpx.HTTPStatusError) -> dict | None:
             "message": (
                 "A signed decision cannot be edited. Start its next revision "
                 "with revise_adr and edit that draft."
+            ),
+        }
+    if "Reopen it to edit it" in text:
+        return {
+            "error": "decision_closed",
+            "detail": text,
+            "message": (
+                "This decision was rejected or withdrawn and is closed: only "
+                "linked_card_ids and linked_diagram_ids can change. Reopen it in the "
+                "web UI to edit it."
             ),
         }
     if "in review" in text:
@@ -7424,6 +7720,760 @@ async def approve_process_flow(
             preview is still recorded as a dry-run batch).
     """
     return await _flow_step("approve", business_process_id, version_id, dry_run)
+
+
+# ── PPM ─────────────────────────────────────────────────────────────────────
+#
+# Project Portfolio Management is a built-in module scoped to Initiative cards
+# (discussion 1457). The tools call its ordinary REST routes with the user's
+# token, so ``ppm.view`` / ``ppm.manage``, the initiative's read scope and every
+# roll-up stay the backend's. The routes do not check the module switch and
+# have no dry run, so every tool asks ``GET /settings/ppm-enabled`` first and
+# every preview is built here (``verified: false``). The pure logic — closed
+# key sets, literals, the old → new diff, payloads, trimming, refusals — is in
+# ``turbo_ea_mcp/ppm.py``. PPM rows publish no event of their own, so
+# ``rollback_batch`` cannot undo a PPM write; deletes stay in the web app,
+# except removing a dependency link.
+
+_PPM_NOT_AUTHENTICATED = "Error: Not authenticated. Please reconnect."
+_PPM_PREVIEW_NOTE = (
+    "Preview built by the MCP server: the PPM routes have no dry run, so the "
+    "initiative's current rows were read and nothing was changed. The backend "
+    "still checks every row on commit. Call again with dry_run=False to save."
+)
+_PPM_NO_ROLLBACK = (
+    "Ask the user to check the result in the web app. rollback_batch cannot "
+    "undo a PPM write: call the tool again with the old values, or delete a "
+    "row in the web app."
+)
+
+
+def _ppm_link(initiative_id: str, tab: str) -> str:
+    return _app_url(_ppm.ppm_path(initiative_id, tab))
+
+
+def _ppm_collection(initiative_id: str, collection: str) -> str:
+    return f"/ppm/initiatives/{initiative_id}/{collection}"
+
+
+def _ppm_refusal(exc: httpx.HTTPStatusError, error: str, **context: object) -> dict | None:
+    """A mapped 4xx from a PPM route with ``context`` added, else None."""
+    answer = _ppm.refusal(exc.response.status_code, _detail(exc), error)
+    return None if answer is None else {**answer, **context}
+
+
+async def _ppm_reads(
+    client: TurboEAClient, paths: dict[str, str], **context: object
+) -> tuple[dict, dict | None]:
+    """``(answers, refusal)``: the module switch, then each of ``paths`` read
+    in order; the first refusal (module off, or a mapped 4xx) stops the reads.
+    Any other error is raised."""
+    if (off := _ppm.disabled_refusal(await client.get("/settings/ppm-enabled"))) is not None:
+        return {}, off
+    answers: dict = {}
+    for name, path in paths.items():
+        try:
+            answers[name] = await client.get(path)
+        except httpx.HTTPStatusError as exc:
+            refusal = _ppm_refusal(exc, "ppm_unavailable", **context)
+            if refusal is None:
+                raise
+            return {}, refusal
+    return answers, None
+
+
+@mcp.tool(annotations=_READ_ANNOT)
+async def get_ppm_plan(initiative_id: str) -> str:
+    """Read an initiative's project plan: its overall completion, work
+    packages and milestones, tasks and the dependencies between them.
+
+    Milestones are work packages with ``is_milestone: true`` (one date:
+    ``start_date`` = ``end_date``). Each task names the work package it sits
+    in (``wbs_id``); each dependency is finish-to-start, from ``pred`` to
+    ``succ``, with both ends' titles. Read this before saving anything with
+    the PPM write tools: their updates take these ids.
+
+    Requires ``ppm.view`` and the PPM module switched on.
+
+    Args:
+        initiative_id: The Initiative card's UUID (``search_cards`` with
+            ``type='Initiative'``).
+    """
+    token = await _get_current_token()
+    if not token:
+        return _PPM_NOT_AUTHENTICATED
+    ids, refusal = _ppm.normalise_ids({"initiative_id": initiative_id})
+    if refusal is not None:
+        return _fmt(refusal)
+    iid = ids["initiative_id"]
+    reads, refusal = await _ppm_reads(
+        TurboEAClient(token),
+        {
+            name: _ppm_collection(iid, name)
+            for name in ("wbs", "tasks", "dependencies", "completion")
+        },
+        initiative_id=iid,
+    )
+    if refusal is not None:
+        return _fmt(refusal)
+    packages = _ppm.trim_rows(reads["wbs"], _ppm.WORK_PACKAGE_KEYS)
+    tasks = _ppm.trim_rows(reads["tasks"], _ppm.TASK_KEYS)
+    deps = _ppm.trim_rows(reads["dependencies"], _ppm.DEPENDENCY_KEYS)
+    completion = reads["completion"] if isinstance(reads["completion"], dict) else {}
+    return _fmt(
+        {
+            "initiative_id": iid,
+            "completion": completion.get("completion"),
+            "counts": _ppm.plan_counts(packages, tasks),
+            "work_packages": packages,
+            "tasks": tasks,
+            "dependencies": _ppm.label_dependencies(deps, tasks, packages),
+            "gantt_url": _ppm_link(iid, "gantt"),
+            "tasks_url": _ppm_link(iid, "tasks"),
+        }
+    )
+
+
+@mcp.tool(annotations=_READ_ANNOT)
+async def list_ppm_status_reports(initiative_id: str, limit: int = 10) -> str:
+    """List an initiative's status reports, newest first: report date, the
+    schedule / cost / scope health (onTrack, atRisk, offTrack), summary,
+    accomplishments, next steps and who reported it.
+
+    Requires ``ppm.view`` and the PPM module switched on.
+
+    Args:
+        initiative_id: The Initiative card's UUID.
+        limit: How many reports to return (default 10, clamped to 1..100).
+    """
+    token = await _get_current_token()
+    if not token:
+        return _PPM_NOT_AUTHENTICATED
+    ids, refusal = _ppm.normalise_ids({"initiative_id": initiative_id})
+    if refusal is not None:
+        return _fmt(refusal)
+    iid = ids["initiative_id"]
+    reads, refusal = await _ppm_reads(
+        TurboEAClient(token), {"reports": _ppm_collection(iid, "reports")}, initiative_id=iid
+    )
+    if refusal is not None:
+        return _fmt(refusal)
+    reports = _ppm.newest_first(_ppm.trim_rows(reads["reports"], _ppm.REPORT_KEYS), "report_date")
+    shown = reports[: _ppm.clamp_limit(limit)]
+    return _fmt(
+        {
+            "initiative_id": iid,
+            "total": len(reports),
+            "returned": len(shown),
+            "reports": shown,
+            "url": _ppm_link(iid, "reports"),
+        }
+    )
+
+
+@mcp.tool(annotations=_READ_ANNOT)
+async def list_ppm_risks(initiative_id: str) -> str:
+    """List an initiative's project risks, highest score first: title,
+    description, probability and impact (1-5), score (probability × impact),
+    mitigation, owner and status (open, mitigating, mitigated, closed,
+    accepted). These are the project's own risks, not the EA Risk Register
+    (``list_risks``).
+
+    Requires ``ppm.view`` and the PPM module switched on.
+
+    Args:
+        initiative_id: The Initiative card's UUID.
+    """
+    token = await _get_current_token()
+    if not token:
+        return _PPM_NOT_AUTHENTICATED
+    ids, refusal = _ppm.normalise_ids({"initiative_id": initiative_id})
+    if refusal is not None:
+        return _fmt(refusal)
+    iid = ids["initiative_id"]
+    reads, refusal = await _ppm_reads(
+        TurboEAClient(token), {"risks": _ppm_collection(iid, "risks")}, initiative_id=iid
+    )
+    if refusal is not None:
+        return _fmt(refusal)
+    risks = _ppm.highest_score_first(_ppm.trim_rows(reads["risks"], _ppm.RISK_KEYS))
+    return _fmt(
+        {"initiative_id": iid, "total": len(risks), "risks": risks, "url": _ppm_link(iid, "risks")}
+    )
+
+
+@mcp.tool(annotations=_READ_ANNOT)
+async def get_ppm_task_comments(task_id: str) -> str:
+    """Read the comments on a PPM task, oldest first, with each author's
+    display name.
+
+    Requires ``ppm.view`` and the PPM module switched on.
+
+    Args:
+        task_id: The task's UUID (``get_ppm_plan`` lists the tasks).
+    """
+    token = await _get_current_token()
+    if not token:
+        return _PPM_NOT_AUTHENTICATED
+    ids, refusal = _ppm.normalise_ids({"task_id": task_id})
+    if refusal is not None:
+        return _fmt(refusal)
+    tid = ids["task_id"]
+    reads, refusal = await _ppm_reads(
+        TurboEAClient(token), {"comments": f"/ppm/tasks/{tid}/comments"}, task_id=tid
+    )
+    if refusal is not None:
+        return _fmt(refusal)
+    comments = _ppm.oldest_first(_ppm.trim_rows(reads["comments"], _ppm.COMMENT_KEYS), "created_at")
+    return _fmt({"task_id": tid, "total": len(comments), "comments": comments})
+
+
+async def _save_ppm_rows(
+    tool: str,
+    entity: _ppm.Entity,
+    initiative_id: str,
+    items: list[dict],
+    dry_run: bool,
+    confirm_token: str,
+) -> str:
+    """The shared body of the four PPM save tools.
+
+    Kill switch, id and item checks, the cap and the confirmation gate come
+    first, with no backend call. Then the module switch and the initiative's
+    current rows are read, before the batch opens, so an id of another
+    initiative refuses the call before anything is written. On commit, one
+    POST (create) or PATCH (update, changed keys only) per item, in order; a
+    mapped 4xx stops the run and reports what was applied."""
+    token = await _get_current_token()
+    if not token:
+        return _PPM_NOT_AUTHENTICATED
+    if (disabled := _writes_disabled_message()) is not None:
+        return disabled
+    ids, refusal = _ppm.normalise_ids({"initiative_id": initiative_id})
+    if refusal is not None:
+        return _fmt(refusal)
+    iid = ids["initiative_id"]
+    rows, errors = _ppm.validate_items(items, entity)
+    if (refusal := _ppm.plan_refusal(errors)) is not None:
+        return _fmt(refusal)
+    if (too_many := _ppm.cap_refusal(len(rows), MCP_MAX_PPM_ROWS_PER_CALL)) is not None:
+        return _fmt(too_many)
+    if not dry_run:
+        gate = _confirmation_required_message(tool, len(rows))
+        if gate is not None and not confirm_token:
+            return gate
+    collection = _ppm_collection(iid, entity.collection)
+    paths = {"rows": collection}
+    if entity is _ppm.TASKS:
+        paths["wbs"] = _ppm_collection(iid, "wbs")
+    reads, refusal = await _ppm_reads(TurboEAClient(token), paths, initiative_id=iid)
+    if refusal is not None:
+        return _fmt(refusal)
+    current = _ppm.index_rows(reads["rows"])
+    errors = _ppm.unknown_id_errors(rows, current, entity)
+    if entity is _ppm.WORK_PACKAGES:
+        errors += _ppm.work_package_errors(rows, current)
+    if entity is _ppm.TASKS:
+        errors += _ppm.task_errors(rows, _ppm.index_rows(reads["wbs"]), current)
+    errors += _ppm.stored_date_errors(
+        rows, current, entity, milestones=entity is _ppm.WORK_PACKAGES
+    )
+    if (refusal := _ppm.plan_refusal(errors)) is not None:
+        return _fmt(refusal)
+    plan = _ppm.plan_saves(rows, current, milestones=entity is _ppm.WORK_PACKAGES)
+    tally = _ppm.plan_tally(plan)
+    url = _ppm_link(iid, entity.tab)
+    async with mutation_batch(
+        token,
+        tool_name=tool,
+        row_count=len(plan),
+        dry_run=dry_run,
+        confirm_token=confirm_token or None,
+    ) as batch:
+        if dry_run:
+            batch.summary = {"rows": len(plan), "status": "previewed"}
+            return _fmt(
+                {
+                    "dry_run": True,
+                    "initiative_id": iid,
+                    "would_save": plan,
+                    "counts": tally,
+                    "note": _PPM_PREVIEW_NOTE,
+                    "verified": False,
+                    "url": url,
+                    **_preview_fields(batch),
+                }
+            )
+        writer = batch.client()
+        saved: list[dict] = []
+        created_refs: dict[str, str] = {}
+        pending = [entry for entry in plan if entry["action"] != "unchanged"]
+        for position, entry in enumerate(pending):
+            body = _ppm.request_body(entry, created_refs)
+            try:
+                if entry["action"] == "create":
+                    answer = await writer.post(collection, json=body)
+                else:
+                    answer = await writer.patch(f"/ppm/{entity.item}/{entry['id']}", json=body)
+            except httpx.HTTPStatusError as exc:
+                refusal = _ppm_refusal(exc, "save_refused", initiative_id=iid)
+                if refusal is None:
+                    raise
+                batch.summary = {
+                    "status": "refused",
+                    "rows": len(plan),
+                    "applied": len(saved),
+                    "error": "save_refused",
+                }
+                return _fmt(
+                    {
+                        **refusal,
+                        "index": entry["index"],
+                        "applied": saved,
+                        "not_applied": [e["index"] for e in pending[position:]],
+                        "url": url,
+                        "batch_id": batch.batch_id,
+                    }
+                )
+            row = _ppm.trim(answer, entity.keys)
+            if "ref" in entry:
+                created_refs[entry["ref"]] = row.get("id")
+            saved.append({"index": entry["index"], "action": entry["action"], **row})
+        batch.summary = {"rows": len(plan), **tally}
+        return _fmt(
+            {
+                "dry_run": False,
+                "initiative_id": iid,
+                "saved": saved,
+                "unchanged": [e["index"] for e in plan if e["action"] == "unchanged"],
+                "url": url,
+                "next_action": _PPM_NO_ROLLBACK,
+                "batch_id": batch.batch_id,
+            }
+        )
+
+
+@mcp.tool(annotations=_WRITE_ADDITIVE_ANNOT)
+async def save_ppm_work_packages(
+    initiative_id: str,
+    items: list[dict],
+    dry_run: bool = True,
+    confirm_token: str = "",
+) -> str:
+    """Create or update an initiative's work packages and milestones.
+
+    Each item takes ``id`` (to update), ``title`` (required to create),
+    ``description``, ``parent_id`` (a work package of this initiative; empty
+    for a top-level one), ``start_date`` / ``end_date`` (YYYY-MM-DD),
+    ``sort_order``, ``is_milestone``, ``completion`` (0-100; only for a work
+    package with no tasks and no sub-packages: the backend calculates the
+    completion of one that has them, so a change to it is refused) and
+    ``assignee_id`` (a user UUID). A milestone (``is_milestone: true``) has
+    one date: give ``start_date``; its ``end_date`` is set to the same day,
+    as the web app does, and an ``end_date`` for a milestone is refused. A
+    milestone holds nothing: a ``parent_id`` / ``parent_ref`` naming one, and
+    ``is_milestone: true`` on a package with tasks or sub-packages, are
+    refused. A ``start_date`` after the ``end_date`` is refused, also when
+    one of them is the stored value.
+
+    To build a hierarchy in one call, give a new item a local ``ref`` and a
+    later item ``parent_ref`` naming it: the parent is created first and its
+    id is used. ``ref`` is never stored. Save work packages before the tasks
+    that sit in them (``save_ppm_tasks``).
+
+    Items without ``id`` are created; items with ``id`` update that work
+    package, which must belong to this initiative (another initiative's id
+    refuses the whole call before anything is written). An update sends only
+    the keys the item carries whose value changes; sending a key as ``null``
+    (or ``""`` for an id) CLEARS it, so leave a key out to keep it. Unknown
+    keys, bad values and an id named twice refuse the call before any
+    backend call.
+
+    Dry-run by default. The preview is built by the MCP server, not verified
+    by the backend (the PPM routes have no dry run: ``"verified": false``):
+    per item ``action`` create, update or unchanged (not sent) and, for an
+    update, ``changes: {field: {old, new}}``. On commit a backend refusal
+    stops the run and lists what was ``applied`` and ``not_applied``.
+    Requires ``ppm.manage``. ``rollback_batch`` cannot undo it (PPM rows
+    publish no event); a work package is deleted in the web app only.
+
+    Args:
+        initiative_id: The Initiative card's UUID.
+        items: The work packages to create or update (1+).
+        dry_run: When True (default), preview without saving.
+        confirm_token: For commits above the confirmation threshold
+            (default 20 items), the token the preview returned.
+    """
+    return await _save_ppm_rows(
+        "save_ppm_work_packages", _ppm.WORK_PACKAGES, initiative_id, items, dry_run, confirm_token
+    )
+
+
+@mcp.tool(annotations=_WRITE_ADDITIVE_ANNOT)
+async def save_ppm_tasks(
+    initiative_id: str,
+    items: list[dict],
+    dry_run: bool = True,
+    confirm_token: str = "",
+) -> str:
+    """Create or update an initiative's tasks.
+
+    Each item takes ``id`` (to update), ``title`` (required to create),
+    ``description``, ``status`` (todo, in_progress, done, blocked),
+    ``priority`` (critical, high, medium, low), ``assignee_id`` (a user UUID;
+    the assignee is notified and gets a to-do), ``start_date`` /
+    ``due_date`` (YYYY-MM-DD), ``sort_order``, ``tags`` (a list of strings)
+    and ``wbs_id``: the work package the task sits in, which must be a work
+    package of this initiative and not a milestone when it changes (re-sending
+    the task's current package is accepted, as the web app's dialog does;
+    ``""`` or ``null`` takes the task out of its work package). Create the
+    work package first with ``save_ppm_work_packages``. A ``start_date``
+    after the ``due_date`` is refused, also when one of them is the stored
+    value.
+
+    Items without ``id`` are created; items with ``id`` update that task,
+    which must belong to this initiative (another initiative's id refuses
+    the whole call before anything is written). An update sends only the
+    keys the item carries whose value changes; sending a key as ``null``
+    CLEARS it, so leave a key out to keep it. Unknown keys, bad values and
+    an id named twice refuse the call before any backend call.
+
+    Dry-run by default. The preview is built by the MCP server, not verified
+    by the backend (``"verified": false``): per item ``action`` create,
+    update or unchanged (not sent) and, for an update, ``changes: {field:
+    {old, new}}``. On commit a backend refusal stops the run and lists what
+    was ``applied`` and ``not_applied``. Requires ``ppm.manage``.
+    ``rollback_batch`` cannot undo it (PPM rows publish no event); a task is
+    deleted in the web app only.
+
+    Args:
+        initiative_id: The Initiative card's UUID.
+        items: The tasks to create or update (1+).
+        dry_run: When True (default), preview without saving.
+        confirm_token: For commits above the confirmation threshold
+            (default 20 items), the token the preview returned.
+    """
+    return await _save_ppm_rows(
+        "save_ppm_tasks", _ppm.TASKS, initiative_id, items, dry_run, confirm_token
+    )
+
+
+@mcp.tool(annotations=_WRITE_ADDITIVE_ANNOT)
+async def save_ppm_status_reports(
+    initiative_id: str,
+    items: list[dict],
+    dry_run: bool = True,
+    confirm_token: str = "",
+) -> str:
+    """Create or update an initiative's status reports.
+
+    Each item takes ``id`` (to update), ``report_date`` (YYYY-MM-DD,
+    required to create), ``schedule_health`` / ``cost_health`` /
+    ``scope_health`` (onTrack, atRisk, offTrack; onTrack when left out of a
+    new report), ``summary``, ``accomplishments`` and ``next_steps``. The
+    reporter of a new report is always the signed-in user.
+
+    Items without ``id`` are created; items with ``id`` update that report,
+    which must belong to this initiative (another initiative's id refuses
+    the whole call before anything is written). An update sends only the
+    keys the item carries whose value changes; sending a text key as
+    ``null`` CLEARS it, so leave a key out to keep it. Unknown keys, bad
+    values and an id named twice refuse the call before any backend call.
+
+    Dry-run by default. The preview is built by the MCP server, not verified
+    by the backend (``"verified": false``): per item ``action`` create,
+    update or unchanged (not sent) and, for an update, ``changes: {field:
+    {old, new}}``. On commit a backend refusal stops the run and lists what
+    was ``applied`` and ``not_applied``. Requires ``ppm.manage``.
+    ``rollback_batch`` cannot undo it (PPM rows publish no event); a report
+    is deleted in the web app only.
+
+    Args:
+        initiative_id: The Initiative card's UUID.
+        items: The status reports to create or update (1+).
+        dry_run: When True (default), preview without saving.
+        confirm_token: For commits above the confirmation threshold
+            (default 20 items), the token the preview returned.
+    """
+    return await _save_ppm_rows(
+        "save_ppm_status_reports",
+        _ppm.STATUS_REPORTS,
+        initiative_id,
+        items,
+        dry_run,
+        confirm_token,
+    )
+
+
+@mcp.tool(annotations=_WRITE_ADDITIVE_ANNOT)
+async def save_ppm_risks(
+    initiative_id: str,
+    items: list[dict],
+    dry_run: bool = True,
+    confirm_token: str = "",
+) -> str:
+    """Create or update an initiative's project risks (not the EA Risk
+    Register, which is ``create_risks`` / ``update_risks``).
+
+    Each item takes ``id`` (to update), ``title`` (required to create),
+    ``description``, ``probability`` and ``impact`` (integers 1-5; 3 when
+    left out of a new risk), ``mitigation``, ``owner_id`` (a user UUID) and
+    ``status`` (open, mitigating, mitigated, closed, accepted). The score is
+    the backend's: probability × impact.
+
+    Items without ``id`` are created; items with ``id`` update that risk,
+    which must belong to this initiative (another initiative's id refuses
+    the whole call before anything is written). An update sends only the
+    keys the item carries whose value changes; sending a key as ``null``
+    CLEARS it, so leave a key out to keep it. Unknown keys, bad values and
+    an id named twice refuse the call before any backend call.
+
+    Dry-run by default. The preview is built by the MCP server, not verified
+    by the backend (``"verified": false``): per item ``action`` create,
+    update or unchanged (not sent) and, for an update, ``changes: {field:
+    {old, new}}``. On commit a backend refusal stops the run and lists what
+    was ``applied`` and ``not_applied``. Requires ``ppm.manage``.
+    ``rollback_batch`` cannot undo it (PPM rows publish no event); a risk is
+    deleted in the web app only.
+
+    Args:
+        initiative_id: The Initiative card's UUID.
+        items: The risks to create or update (1+).
+        dry_run: When True (default), preview without saving.
+        confirm_token: For commits above the confirmation threshold
+            (default 20 items), the token the preview returned.
+    """
+    return await _save_ppm_rows(
+        "save_ppm_risks", _ppm.RISKS, initiative_id, items, dry_run, confirm_token
+    )
+
+
+@mcp.tool(annotations=_WRITE_ADDITIVE_ANNOT)
+async def add_ppm_task_comment(task_id: str, content: str, dry_run: bool = True) -> str:
+    """Post a comment on a PPM task, as the signed-in user.
+
+    ``content`` is plain text, 1 to 10 000 characters, not blank. The task
+    is read first, so a task that does not exist or that the user may not
+    see is refused before anything is written.
+
+    Dry-run by default. The preview is built by the MCP server, not verified
+    by the backend (the route has no dry run: ``"verified": false``).
+    Requires ``ppm.manage``. ``rollback_batch`` cannot undo it: a posted
+    comment is edited or deleted in the task's dialog in the web app.
+
+    Args:
+        task_id: The task's UUID (``get_ppm_plan`` lists the tasks).
+        content: The comment text.
+        dry_run: When True (default), preview without posting.
+    """
+    token = await _get_current_token()
+    if not token:
+        return _PPM_NOT_AUTHENTICATED
+    if (disabled := _writes_disabled_message()) is not None:
+        return disabled
+    ids, refusal = _ppm.normalise_ids({"task_id": task_id})
+    if refusal is not None:
+        return _fmt(refusal)
+    tid = ids["task_id"]
+    content, refusal = _ppm.check_comment(content)
+    if refusal is not None:
+        return _fmt(refusal)
+    path = f"/ppm/tasks/{tid}/comments"
+    reads, refusal = await _ppm_reads(TurboEAClient(token), {"comments": path}, task_id=tid)
+    if refusal is not None:
+        return _fmt(refusal)
+    existing = len(_ppm.trim_rows(reads["comments"], _ppm.COMMENT_KEYS))
+    async with mutation_batch(
+        token, tool_name="add_ppm_task_comment", row_count=1, dry_run=dry_run
+    ) as batch:
+        if dry_run:
+            batch.summary = {"rows": 1, "status": "previewed"}
+            return _fmt(
+                {
+                    "dry_run": True,
+                    "task_id": tid,
+                    "would_post": {"content": content},
+                    "existing_comments": existing,
+                    "note": _PPM_PREVIEW_NOTE,
+                    "verified": False,
+                    **_preview_fields(batch),
+                }
+            )
+        try:
+            answer = await batch.client().post(path, json={"content": content})
+        except httpx.HTTPStatusError as exc:
+            refusal = _ppm_refusal(exc, "comment_refused", task_id=tid)
+            if refusal is None:
+                raise
+            batch.summary = {"status": "refused", "rows": 1, "error": "comment_refused"}
+            return _fmt({**refusal, "batch_id": batch.batch_id})
+        batch.summary = {"rows": 1, "posted": 1}
+        return _fmt(
+            {
+                "dry_run": False,
+                "task_id": tid,
+                "comment": _ppm.trim(answer, _ppm.COMMENT_KEYS),
+                "batch_id": batch.batch_id,
+            }
+        )
+
+
+@mcp.tool(annotations=_WRITE_DESTRUCTIVE_ANNOT)
+async def set_ppm_dependencies(
+    initiative_id: str,
+    add: list[dict] | None = None,
+    remove: list[str] | None = None,
+    dry_run: bool = True,
+    confirm_token: str = "",
+) -> str:
+    """Add or remove finish-to-start dependency links between an
+    initiative's tasks and work packages (the Gantt chart's arrows).
+
+    ``add`` entries are ``{"pred_kind": "task" | "wbs", "pred_id": <UUID>,
+    "succ_kind": "task" | "wbs", "succ_id": <UUID>}``: the successor starts
+    after the predecessor finishes. Both ends must be rows of this
+    initiative (``get_ppm_plan``). ``remove`` is a list of dependency ids
+    of this initiative. Give at least one of the two. A row depending on
+    itself, a link named twice and an unknown id refuse the call before
+    anything is written; a link that already exists is reported ``exists``
+    and not sent again. Removes run before adds. The backend refuses a link
+    that would close a cycle.
+
+    Destructive because it removes links. Dry-run by default: the preview
+    is built by the MCP server, not verified by the backend (``"verified":
+    false``). On commit a backend refusal stops the run and lists what was
+    ``applied`` and ``not_applied``. Requires ``ppm.manage``.
+    ``rollback_batch`` cannot undo it: add a removed link again, or remove
+    an added one, with this tool.
+
+    Args:
+        initiative_id: The Initiative card's UUID.
+        add: Links to add.
+        remove: Dependency ids to remove.
+        dry_run: When True (default), preview without saving.
+        confirm_token: For commits above the confirmation threshold
+            (default 20 links added + removed), the token the preview
+            returned.
+    """
+    token = await _get_current_token()
+    if not token:
+        return _PPM_NOT_AUTHENTICATED
+    if (disabled := _writes_disabled_message()) is not None:
+        return disabled
+    ids, refusal = _ppm.normalise_ids({"initiative_id": initiative_id})
+    if refusal is not None:
+        return _fmt(refusal)
+    iid = ids["initiative_id"]
+    adds, removes, errors = _ppm.dependency_changes(add, remove)
+    if (refusal := _ppm.plan_refusal(errors)) is not None:
+        return _fmt(refusal)
+    row_count = len(adds) + len(removes)
+    if (too_many := _ppm.cap_refusal(row_count, MCP_MAX_PPM_ROWS_PER_CALL)) is not None:
+        return _fmt(too_many)
+    if not dry_run:
+        gate = _confirmation_required_message("set_ppm_dependencies", row_count)
+        if gate is not None and not confirm_token:
+            return gate
+    collection = _ppm_collection(iid, "dependencies")
+    reads, refusal = await _ppm_reads(
+        TurboEAClient(token),
+        {
+            "dependencies": collection,
+            "tasks": _ppm_collection(iid, "tasks"),
+            "wbs": _ppm_collection(iid, "wbs"),
+        },
+        initiative_id=iid,
+    )
+    if refusal is not None:
+        return _fmt(refusal)
+    add_plan, remove_plan, errors = _ppm.dependency_plan(
+        adds,
+        removes,
+        _ppm.index_rows(reads["dependencies"]),
+        _ppm.index_rows(reads["tasks"]),
+        _ppm.index_rows(reads["wbs"]),
+    )
+    if (refusal := _ppm.plan_refusal(errors)) is not None:
+        return _fmt(refusal)
+    url = _ppm_link(iid, "gantt")
+    async with mutation_batch(
+        token,
+        tool_name="set_ppm_dependencies",
+        row_count=row_count,
+        dry_run=dry_run,
+        confirm_token=confirm_token or None,
+    ) as batch:
+        if dry_run:
+            batch.summary = {"rows": row_count, "status": "previewed"}
+            return _fmt(
+                {
+                    "dry_run": True,
+                    "initiative_id": iid,
+                    "would_remove": remove_plan,
+                    "would_add": add_plan,
+                    "note": _PPM_PREVIEW_NOTE,
+                    "verified": False,
+                    "url": url,
+                    **_preview_fields(batch),
+                }
+            )
+        writer = batch.client()
+        steps = [("remove", entry) for entry in remove_plan] + [
+            ("add", entry) for entry in add_plan if entry["action"] == "add"
+        ]
+        applied: list[dict] = []
+        for position, (kind, entry) in enumerate(steps):
+            try:
+                if kind == "remove":
+                    await writer.delete(f"/ppm/dependencies/{entry['id']}")
+                    applied.append({"list": "remove", "index": entry["index"], "id": entry["id"]})
+                else:
+                    body = {key: entry[key] for key in _ppm.DEPENDENCY_KEYS[1:5]}
+                    answer = await writer.post(
+                        collection, json={**body, "kind": _ppm.DEPENDENCY_TYPE}
+                    )
+                    applied.append(
+                        {
+                            "list": "add",
+                            "index": entry["index"],
+                            **_ppm.trim(answer, _ppm.DEPENDENCY_KEYS),
+                        }
+                    )
+            except httpx.HTTPStatusError as exc:
+                refusal = _ppm_refusal(exc, "dependency_refused", initiative_id=iid)
+                if refusal is None:
+                    raise
+                batch.summary = {
+                    "status": "refused",
+                    "rows": row_count,
+                    "applied": len(applied),
+                    "error": "dependency_refused",
+                }
+                return _fmt(
+                    {
+                        **refusal,
+                        "list": kind,
+                        "index": entry["index"],
+                        "applied": applied,
+                        "not_applied": [
+                            {"list": k, "index": e["index"]} for k, e in steps[position:]
+                        ],
+                        "url": url,
+                        "batch_id": batch.batch_id,
+                    }
+                )
+        batch.summary = {"rows": row_count, "applied": len(applied)}
+        return _fmt(
+            {
+                "dry_run": False,
+                "initiative_id": iid,
+                "applied": applied,
+                "exists": [e["index"] for e in add_plan if e["action"] == "exists"],
+                "url": url,
+                "next_action": _PPM_NO_ROLLBACK,
+                "batch_id": batch.batch_id,
+            }
+        )
 
 
 # ── Extension operations ────────────────────────────────────────────────────

@@ -359,7 +359,32 @@ async def require_card_permission(
 #   nothing on upgrade. ``get_relation_types()`` rows carry
 #   ``lifecycle_enabled`` (whether the UI offers the date editor on that type).
 
-SDK_VERSION = "1.20"
+# 1.21: review outcomes. ``ExtDecision.outcome`` is a TRAILING field with a
+#   default: how a decision's review ended short of a signature —
+#   ``"changes_requested"`` (an editable draft again), ``"rejected"`` or
+#   ``"withdrawn"`` (closed: locked until reopened in the app) — or ``None``.
+#   ``status`` keeps its three values (a decision with an outcome is always a
+#   ``"draft"``). The bridge still creates drafts only, so an extension never
+#   sets an outcome; no new grant.
+
+# 1.22: maintained lifecycle phases. An extension holding the grant
+#   ``core.cards.maintain_lifecycle`` (plus ``core.cards.write``) may claim
+#   chosen phases of a card's lifecycle and keep them up to date:
+#   ``ctx.data.maintain_lifecycle(card_id, {"active": "2024-01-01",
+#   "endOfLife": None})`` sets those phases (``None`` removes one), clamps a
+#   hand-typed date of another phase that would break the chronological order
+#   against them, and records the claim on the card; while the extension stays
+#   enabled and licensed, nobody else can change those phases (REST, bulk
+#   edit, imports and the plain ``update_card`` — the owner's own included —
+#   are refused or skip them). ``ctx.data.release_lifecycle(card_id)`` drops
+#   the extension's own claim; the dates stay. A claim another extension
+#   holds effectively is refused; an ineffective one (its owner disabled,
+#   lapsed or gone) is taken over. Disabling, a lapse or an uninstall makes the
+#   phases editable again — values are never deleted. ``ExtCard`` gains a
+#   TRAILING, defaulted ``lifecycle_maintained`` (the raw claim
+#   ``{"ext", "phases"}`` or ``None``), so older constructions keep working.
+
+SDK_VERSION = "1.22"
 
 
 @dataclass(frozen=True)
@@ -552,6 +577,9 @@ class ExtCard:
     data_quality: float
     created_at: str | None
     updated_at: str | None
+    #: SDK 1.22 — the raw lifecycle claim ``{"ext": key, "phases": [...]}`` or
+    #: ``None``. Trailing and defaulted so older constructions keep working.
+    lifecycle_maintained: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -632,6 +660,12 @@ class ExtDecision:
     ``standing`` is ``None`` for a decision that is not signed; ``is_current``
     is True for exactly one revision of each decision; ``recorded`` marks a
     decision recorded as already decided instead of signed in the app.
+
+    ``outcome`` (SDK 1.21) is how a review ended short of a signature:
+    ``"changes_requested"`` (an editable draft), ``"rejected"`` or
+    ``"withdrawn"`` (closed until reopened in the app), else ``None``. A
+    decision with an outcome is always ``status="draft"``: ``status`` keeps
+    its three values.
     """
 
     id: str
@@ -648,6 +682,7 @@ class ExtDecision:
     effective_from: str | None = None
     valid_until: str | None = None
     recorded: bool = False
+    outcome: str | None = None
 
 
 class DecisionsBridge(Protocol):
@@ -1017,6 +1052,27 @@ class DataBridge(Protocol):
 
     async def remove_stakeholder(self, card_id: str, user_id: str, role: str) -> bool:
         """Remove one assignment (SDK 1.9). ``False`` when there was none."""
+        ...
+
+    async def maintain_lifecycle(
+        self, card_id: str, values: dict[str, str | None], *, dry_run: bool = False
+    ) -> ExtCard:
+        """Set and claim lifecycle phases of a card (SDK 1.22, grants
+        ``core.cards.maintain_lifecycle`` and ``core.cards.write``).
+
+        ``values`` maps phases (``plan`` / ``phaseIn`` / ``active`` /
+        ``phaseOut`` / ``endOfLife``) to a ``YYYY-MM-DD`` date or ``None``
+        (remove the phase). Those phases become the card's maintained set:
+        while the extension is enabled and licensed nobody else may change
+        them. A hand-typed date of another phase that would break the
+        chronological order against a maintained one is clamped to it.
+        Refused when another extension holds an effective claim on the card;
+        a call that changes nothing writes nothing."""
+        ...
+
+    async def release_lifecycle(self, card_id: str, *, dry_run: bool = False) -> ExtCard:
+        """Drop this extension's own lifecycle claim on a card (SDK 1.22); the
+        dates stay. A no-op when the card carries no claim of its own."""
         ...
 
 

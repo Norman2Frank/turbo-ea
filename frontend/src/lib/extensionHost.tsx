@@ -164,12 +164,30 @@ import { FilterCheckboxList, FilterSectionHeader } from "@/components/FilterSide
 // of the section is only safe because of that lift. `buildGanttArrowPath` is
 // pure geometry, so a finish-to-start arrow drawn by an extension is the same
 // shape as one drawn by the PPM gantt instead of a second convention.
+// SDK 1.39 — `LifecycleSection` takes an optional `footer` node, mounted at
+// the end of the section only while it is expanded; the section itself still
+// makes no API call (card detail passes its relation lifecycles panel there).
+// SDK 1.41 — `LifecycleSection` takes an optional `maintained`
+// (`{phases, name}`): phases an installed extension maintains show a chip and
+// are not editable, and its save keeps them at their stored values. Omitted,
+// the section is unchanged; `phaseAnnotation` keeps its meaning.
 import LifecycleSection from "@/features/cards/sections/LifecycleSection";
 import { PHASES, getPhaseLabels } from "@/lib/lifecyclePhases";
 import { buildGanttArrowPath } from "@/features/ppm/ganttArrowPath";
-import type { ArchitectureDecision, Card, CardPanelFocus, DecisionStanding } from "@/types";
+import type {
+  ArchitectureDecision,
+  Card,
+  CardPanelFocus,
+  DecisionStanding,
+  ReviewOutcomeKind,
+} from "@/types";
 
-export const UI_SDK_VERSION = "1.38";
+// SDK 1.40 — ADR panels receive the decision's review `outcome`
+// (changes_requested | rejected | withdrawn, null for none), and `readOnly` is
+// also true on a closed decision (rejected or withdrawn): it stays a draft
+// but is locked until it is reopened. `status` keeps its three values.
+// SDK 1.41 — `LifecycleSection` accepts `maintained` (see its import above).
+export const UI_SDK_VERSION = "1.41";
 
 /**
  * Core nav groups an extension route may request placement into (instead of the
@@ -315,8 +333,9 @@ export interface ExtensionAdrPanelProps {
   // the decision's attributes. Since SDK 1.34 it is true whenever the decision
   // is not a draft — in review as well as signed, because a decision sent for
   // review is locked so signatories sign exactly what they were sent — and
-  // always on the read-only preview page. Gate editing on `readOnly`, never on
-  // `signed` or `status`.
+  // always on the read-only preview page. Since SDK 1.40 it is also true on a
+  // closed decision (rejected or withdrawn: a draft locked until reopened).
+  // Gate editing on `readOnly`, never on `signed` or `status`.
   readOnly: boolean;
   // SDK 1.34: where a signed decision stands today (scheduled | in_force |
   // amended | superseded | revoked | expired), null before signing, and
@@ -324,6 +343,11 @@ export interface ExtensionAdrPanelProps {
   // them.
   standing?: DecisionStanding | null;
   isCurrent?: boolean;
+  // SDK 1.40: how the last review ended without a signature —
+  // changes_requested (an editable draft sent back), rejected or withdrawn
+  // (closed: the decision is a locked draft until reopened, and `readOnly` is
+  // true) — or null for none. Optional: older hosts omit it.
+  outcome?: ReviewOutcomeKind | null;
 }
 
 /**

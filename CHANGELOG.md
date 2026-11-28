@@ -5,6 +5,63 @@ All notable changes to Turbo EA are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.223.0] - 2026-11-28
+
+### Added
+- An installed extension can keep chosen lifecycle dates of a card up to date automatically. Those dates show as set automatically and cannot be edited by hand — in the card, bulk edit, imports or through an AI assistant — while the extension is active; disabling or uninstalling it, or a lapsed licence, makes them editable again, and the dates are kept.
+- Survey apply, ServiceNow sync and platform-migration imports skip a lifecycle date an installed extension maintains, keep the stored date and report the skip; rolling back a change restores the other dates and reports the ones it kept.
+- The survey results page warns when an applied answer was skipped because its lifecycle date is maintained by an installed extension.
+- A card's History shows a "Dates set automatically" entry when an installed extension starts or stops maintaining its lifecycle dates.
+- The Excel import warns, row by row, that the sheet's values for lifecycle dates an installed extension maintains are ignored.
+
+## [2.222.1] - 2026-11-27
+
+### Fixed
+- In the **@** mention list of a decision or SoAW, the row picked with the arrow keys is scrolled into view even when the key is pressed just as the results appear, instead of the first card row.
+- In a process's **Process Flow** element tables (published and draft), a cell opened while another cell's change is still saving stays open when that save finishes.
+- Applying a saved inventory view keeps the view's column order when it is applied while the card type's fields are still loading.
+- The **Stakeholder Roles** tab of a card type no longer reloads, and briefly hides the role being edited, each time the drawer around it updates, for example to show a failed save's error.
+
+## [2.222.0] - 2026-11-27
+
+### Added
+- **PPM through an AI assistant**: the MCP server reads a project's plan (work packages, milestones, tasks and dependencies), status reports, project risks and task comments, creates and updates work packages, milestones, tasks, status reports and risks, comments on a task, and adds or removes dependency links — each change previewed first, and only while the PPM module is switched on ([#1457](https://github.com/vincentmakes/turbo-ea/discussions/1457)).
+- An MCP server setting, `MCP_MAX_PPM_ROWS_PER_CALL` (default 200), caps how many PPM rows or dependency links one AI assistant call may change (#1457).
+
+### Changed
+- The Description field of a PPM task, and the other long text fields in the PPM dialogs, grow with their content instead of showing a fixed few lines (#1457).
+
+### Fixed
+- A PPM task can no longer be placed in a work package of another project through the API.
+- An unknown assignee or risk owner sent to the PPM API is refused with a clear message instead of a server error.
+- Rolling back an AI assistant's change no longer resets a project's calculated fields (its budget, actual costs and calculated progress fields) while its PPM rows stay as they are.
+
+## [2.221.0] - 2026-11-27
+
+### Added
+- Decisions and Statements of Architecture Work record how a review ended without a signature — **Changes requested**, **Rejected** or **Withdrawn** — with who, when and why, shown on the status chip, in a banner on the document, on its History timeline, in the exports and as an **Outcome** filter and group in the decisions register.
+- A pending signatory can **Request changes**, which sends the document back to an editable draft, besides **Sign** and **Reject**.
+- **Withdraw** closes a saved draft or a document in review with a reason, cancelling its pending signature requests, and **Reopen** turns a rejected or withdrawn document back into a plain draft.
+- The decisions register hides rejected and withdrawn decisions until **Show closed** is switched on.
+- Extension SDK 1.21: decisions read through the decisions bridge carry their review outcome; UI SDK 1.40: decision panels receive the outcome and are read-only on a rejected or withdrawn decision.
+
+### Changed
+- **Reject** now closes the decision or SoAW (locked and kept on record until reopened) instead of returning it to draft; returning it to draft is the new **Request changes**, and `POST /adr/{id}/reject` and `POST /soaw/{id}/reject` changed meaning accordingly (the former behaviour is `POST /{id}/request-changes`). Drafts whose last review was rejected before this version read **Changes requested**.
+
+## [2.220.0] - 2026-11-27
+
+### Added
+- The **Lifecycle report** lists each card's dated relations beneath it as foldable rows, each led by the other card's name and drawn as its own phase bar on the report's time axis — in *All types* as well as for one card type, in the table view with their state and dates, and in exports; a card with no dates of its own is listed when it has dated relations.
+- A card's **Lifecycle** section shows its dated relations on one time axis with the card itself — grouped by verb, with a Today line, their phase chips and the clock to edit them — and flags a relation still in effect after the card's own End of Life.
+- The **Add relation** dialog takes relation dates for a relation type that tracks lifecycle, applied to every card added and to those already added.
+- The inventory's relation cell popover carries the clock that sets or edits a relation's dates.
+- The NexaTech demo data includes dated relations in every state, with Track lifecycle switched on for their relation types.
+
+### Changed
+- **Track lifecycle** is switched on and off right in the relation list (the Relations tab and a card type's own Relations tab), in place of the read-only Lifecycle chip.
+- The Excel export of a report's table leaves icon names out of its headers and cells.
+- Right to left, the Lifecycle report's timeline opens on the last five years instead of the oldest dates.
+
 ## [2.219.2] - 2026-11-27
 
 ### Fixed

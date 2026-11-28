@@ -556,6 +556,7 @@
         "type": "object"
       },
       "ADRRejectRequest": {
+        "description": "Body of ``POST /adr/{id}/reject``, ``/request-changes`` and ``/withdraw``.\n\nThe reason: the outcome's note and the timeline row's note; a rejection\nor a request for changes also opens a thread carrying it.",
         "properties": {
           "comment": {
             "maxLength": 4000,
@@ -4217,6 +4218,16 @@
               }
             ],
             "title": "Lifecycle"
+          },
+          "lifecycle_maintained": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LifecycleMaintainedRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "logo_updated_at": {
             "anyOf": [
@@ -8833,6 +8844,33 @@
           "entitlements"
         ],
         "title": "LicenseOut",
+        "type": "object"
+      },
+      "LifecycleMaintainedRef": {
+        "description": "Lifecycle phases a licensed extension keeps up to date on a card (SDK\n1.22). Sent only while the claim is in force; those phases cannot be\nedited by hand.",
+        "properties": {
+          "ext": {
+            "title": "Ext",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "phases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Phases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ext",
+          "name",
+          "phases"
+        ],
+        "title": "LifecycleMaintainedRef",
         "type": "object"
       },
       "LifecyclePhaseHelpPayload": {
@@ -22228,6 +22266,36 @@
               "description": "Only decisions with this standing (comma-separated allowed)",
               "title": "Standing"
             }
+          },
+          {
+            "description": "Only decisions with this review outcome (comma-separated allowed): changes_requested, rejected, withdrawn",
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only decisions with this review outcome (comma-separated allowed): changes_requested, rejected, withdrawn",
+              "title": "Outcome"
+            }
+          },
+          {
+            "description": "Also list closed decisions (rejected or withdrawn)",
+            "in": "query",
+            "name": "include_closed",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Also list closed decisions (rejected or withdrawn)",
+              "title": "Include Closed",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -22377,6 +22445,36 @@
               ],
               "description": "Only decisions with this standing (comma-separated allowed)",
               "title": "Standing"
+            }
+          },
+          {
+            "description": "Only decisions with this review outcome (comma-separated allowed): changes_requested, rejected, withdrawn",
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only decisions with this review outcome (comma-separated allowed): changes_requested, rejected, withdrawn",
+              "title": "Outcome"
+            }
+          },
+          {
+            "description": "Also list closed decisions (rejected or withdrawn)",
+            "in": "query",
+            "name": "include_closed",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Also list closed decisions (rejected or withdrawn)",
+              "title": "Include Closed",
+              "type": "boolean"
             }
           }
         ],
@@ -23510,7 +23608,7 @@
     },
     "/api/v1/adr/{adr_id}/reject": {
       "post": {
-        "description": "Reject the ADR as a signatory. Resets to draft (the revision number\nstays: revisions count signed versions), clears all signatories, and\nnotifies the creator.",
+        "description": "Reject the decision, as a signatory: it closes (outcome ``rejected``),\nstays a draft that is locked until it is reopened, and a ``rejection``\nthread carries the reason. Sending it back to be worked on is\n``request-changes``.",
         "operationId": "reject_adr_api_v1_adr__adr_id__reject_post",
         "parameters": [
           {
@@ -23554,6 +23652,98 @@
           }
         },
         "summary": "Reject Adr",
+        "tags": [
+          "adr"
+        ]
+      }
+    },
+    "/api/v1/adr/{adr_id}/reopen": {
+      "post": {
+        "description": "Reopen a rejected or withdrawn decision (``adr.manage``): a plain,\neditable draft again. 409 ``not_closed`` otherwise.",
+        "operationId": "reopen_adr_api_v1_adr__adr_id__reopen_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "adr_id",
+            "required": true,
+            "schema": {
+              "title": "Adr Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reopen Adr",
+        "tags": [
+          "adr"
+        ]
+      }
+    },
+    "/api/v1/adr/{adr_id}/request-changes": {
+      "post": {
+        "description": "Send the decision back for changes, as a signatory: an editable draft\nagain with outcome ``changes_requested`` (cleared when signatures are\nrequested again) and a ``change_request`` thread carrying the reason.",
+        "operationId": "request_adr_changes_api_v1_adr__adr_id__request_changes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "adr_id",
+            "required": true,
+            "schema": {
+              "title": "Adr Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ADRRejectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Adr Changes",
         "tags": [
           "adr"
         ]
@@ -23762,6 +23952,57 @@
           }
         },
         "summary": "Sign Adr",
+        "tags": [
+          "adr"
+        ]
+      }
+    },
+    "/api/v1/adr/{adr_id}/withdraw": {
+      "post": {
+        "description": "Withdraw a draft or a decision in review (``adr.manage``): it closes\n(outcome ``withdrawn``, the reason as its note) until it is reopened. In\nreview, the sign to-dos close and the pending signatories are told, as on\na recall. 400 when signed, 409 ``closed`` when already closed.",
+        "operationId": "withdraw_adr_api_v1_adr__adr_id__withdraw_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "adr_id",
+            "required": true,
+            "schema": {
+              "title": "Adr Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ADRRejectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Adr",
         "tags": [
           "adr"
         ]
@@ -41017,7 +41258,7 @@
     },
     "/api/v1/reports/roadmap": {
       "get": {
-        "description": "Roadmap: lifecycle timeline data.\n\nWith ``type`` naming a visible card type the cards also carry their\nrelations and tags, with the relation types, related-card options and tag\ngroups the Lifecycle report's filter section reads (the same payload as\n``/reports/app-portfolio``). Without it \u2014 *All types* \u2014 or for a type that\nis unknown or hidden, the rows are the plain timeline rows.\n\nDeliberately behind this report's own gate rather than ``reports.portfolio``:\nthe extra payload is metamodel and tag-group configuration, and every card\nin it \u2014 the rows, their related cards, the ancestor closure \u2014 stays inside\nthe reader's ``CardReadScope``, so a reports-only role sees nothing here it\ncould not see on the report itself.",
+        "description": "Roadmap: lifecycle timeline data.\n\nWith ``type`` naming a visible card type the cards also carry their\nrelations and tags, with the relation types, related-card options and tag\ngroups the Lifecycle report's filter section reads (the same payload as\n``/reports/app-portfolio``). Without it \u2014 *All types* \u2014 or for a type that\nis unknown or hidden, the rows are the plain timeline rows.\n\nDeliberately behind this report's own gate rather than ``reports.portfolio``:\nthe extra payload is metamodel and tag-group configuration, and every card\nin it \u2014 the rows, their related cards, the ancestor closure \u2014 stays inside\nthe reader's ``CardReadScope``, so a reports-only role sees nothing here it\ncould not see on the report itself.\n\nOn both paths a card with relations that carry their own lifecycle dates\nlists them as ``relation_lifecycles`` \u2014 ``[{relation_type, direction,\nrelated_id, related_name, related_type, lifecycle}]``, sorted by the other\ncard's name, present only when non-empty \u2014 for the report's relation\nsub-rows. These are every dated relation, planned and ended ones included,\nwhose other card the reader may see (no relation attributes travel with\nthem). A card with no dates of its own is listed when it has such\nrelations. ``relations`` (the filters' input) stays the relations in\neffect today, without dates.",
         "operationId": "roadmap_api_v1_reports_roadmap_get",
         "parameters": [
           {
@@ -46197,6 +46438,18 @@
               "title": "Include Earlier",
               "type": "boolean"
             }
+          },
+          {
+            "description": "Also list closed documents (rejected or withdrawn)",
+            "in": "query",
+            "name": "include_closed",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Also list closed documents (rejected or withdrawn)",
+              "title": "Include Closed",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -46897,7 +47150,7 @@
     },
     "/api/v1/soaw/{soaw_id}/reject": {
       "post": {
-        "description": "Reject the SoAW as a signatory. Resets to draft (the revision number\nstays: revisions count signed versions), clears all signatories, notifies\nthe creator and opens a rejection thread carrying the reason.\n\nLike signing: a signatory holding ``soaw.sign`` (or ``soaw.manage``).",
+        "description": "Reject the SoAW, as a signatory: it closes (outcome ``rejected``),\nstays a draft that is locked until it is reopened, and a ``rejection``\nthread carries the reason. Sending it back to be worked on is\n``request-changes``.",
         "operationId": "reject_soaw_api_v1_soaw__soaw_id__reject_post",
         "parameters": [
           {
@@ -46941,6 +47194,98 @@
           }
         },
         "summary": "Reject Soaw",
+        "tags": [
+          "soaw"
+        ]
+      }
+    },
+    "/api/v1/soaw/{soaw_id}/reopen": {
+      "post": {
+        "description": "Reopen a rejected or withdrawn SoAW (``soaw.manage``): a plain,\neditable draft again. 409 ``not_closed`` otherwise.",
+        "operationId": "reopen_soaw_api_v1_soaw__soaw_id__reopen_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "soaw_id",
+            "required": true,
+            "schema": {
+              "title": "Soaw Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reopen Soaw",
+        "tags": [
+          "soaw"
+        ]
+      }
+    },
+    "/api/v1/soaw/{soaw_id}/request-changes": {
+      "post": {
+        "description": "Send the SoAW back for changes, as a signatory: an editable draft\nagain with outcome ``changes_requested`` (cleared when signatures are\nrequested again) and a ``change_request`` thread carrying the reason.",
+        "operationId": "request_soaw_changes_api_v1_soaw__soaw_id__request_changes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "soaw_id",
+            "required": true,
+            "schema": {
+              "title": "Soaw Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Soaw Changes",
         "tags": [
           "soaw"
         ]
@@ -47132,6 +47477,57 @@
           }
         },
         "summary": "Sign Soaw",
+        "tags": [
+          "soaw"
+        ]
+      }
+    },
+    "/api/v1/soaw/{soaw_id}/withdraw": {
+      "post": {
+        "description": "Withdraw a draft or a SoAW in review (``soaw.manage``): it closes\n(outcome ``withdrawn``, the reason as its note) until it is reopened. In\nreview, the sign to-dos close and the pending signatories are told, as on\na recall. 400 when signed, 409 ``closed`` when already closed.",
+        "operationId": "withdraw_soaw_api_v1_soaw__soaw_id__withdraw_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "soaw_id",
+            "required": true,
+            "schema": {
+              "title": "Soaw Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Soaw",
         "tags": [
           "soaw"
         ]
